@@ -66,9 +66,46 @@ const FONT: [80]u8 = [80]u8{
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 };
 
-fn initEmulator() void {
+// Instructions
+const Instruction = union(enum) {
+    CLEAR_SCREEN: void,
+    JUMP: u16,
+    SET_REGISTER: struct {
+        register: u8,
+        value: u8,
+    },
+    ADD_REGISTER: struct {
+        register: u8,
+        value: u8,
+    },
+    SET_INDEX: u16,
+    DRAW: struct {
+        register_x: u8,
+        register_y: u8,
+        size: u8,
+    },
+};
+
+fn initEmulator(program: []u8) void {
     // Load the font into main memory
     std.mem.copyForwards(u8, MEM[0x050..0x0A0], FONT[0..]);
+    // Ensure Program Counter is set to 0x200
+    PC = 0x200;
+    // Load the program into main memory
+    std.mem.copyForwards(u8, MEM[PC .. PC + program.len], program);
+}
+
+fn fetchInstruction() !Instruction {
+    // Get a 2 byte slice of MEM at PC
+    // Mask off the first nibble and switch on it
+    // Depending on the above parse the rest of the instruction
+    // Create the Instruction member and return
+    // Error on EoF
+    return error.OUT_OF_BOUNDS;
+}
+
+fn executeInstruction(_: Instruction) !void {
+    return error.OUT_OF_BOUNDS;
 }
 
 // ======== Stack Functions =======
@@ -119,7 +156,16 @@ pub fn main() !void {
     defer raylib.closeWindow();
     raylib.setTargetFPS(FPS);
 
-    initEmulator();
+    var examples = try std.fs.cwd().openDir("examples", .{});
+    defer examples.close();
+    const ibmrom = try examples.openFile("IBM_Logo.ch8", .{});
+    defer ibmrom.close();
+    var buf: [256]u8 = undefined;
+    const read = try ibmrom.readAll(&buf);
+
+    initEmulator(buf[0..read]);
+
+    var err: ?[*:0]const u8 = null;
 
     while (!raylib.windowShouldClose()) {
         // Decrement Timers: Not sure of a way to do this
@@ -130,7 +176,21 @@ pub fn main() !void {
         raylib.beginDrawing();
         defer raylib.endDrawing();
 
-        raylib.clearBackground(raylib.Color.black);
-        try drawPixel(0, 0);
+        // Display Error
+        if (err) |value| {
+            drawError(value);
+            continue;
+        }
+
+        // Fetch Instruction
+        const instruction = fetchInstruction() catch {
+            err = "fetch error";
+            continue;
+        };
+
+        // Execute Instruction
+        executeInstruction(instruction) catch {
+            err = "execute error";
+        };
     }
 }
