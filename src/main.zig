@@ -24,7 +24,7 @@ var PC: u16 = 0x200;
 // Stack of 256 bytes (which should be more then enough)
 const MAX_STACK = 256;
 var SP: u16 = 0;
-var STACK: [MAX_STACK]u8 = [_]u8{0} ** MAX_STACK;
+var STACK: [MAX_STACK]u16 = [_]u16{0} ** MAX_STACK;
 
 // Index Register
 var IN: u16 = 0;
@@ -76,7 +76,25 @@ const FONT: [80]u8 = [80]u8{
 // Instructions
 const Instruction = union(enum) {
     CLEAR_SCREEN: void,
+    RETURN: void,
     JUMP: u16,
+    JUMP_SUBROUTINE: u16,
+    EQUAL_TO: struct {
+        register: u8,
+        value: u8,
+    },
+    NOT_EQUAL_TO: struct {
+        register: u8,
+        value: u8,
+    },
+    EQUAL_REGISTERS: struct {
+        register_x: u8,
+        register_y: u8,
+    },
+    NOT_EQUAL_REGISTERS: struct {
+        register_x: u8,
+        register_y: u8,
+    },
     SET_REGISTER: struct {
         register: u8,
         value: u8,
@@ -126,8 +144,25 @@ fn fetchInstruction() EmulatorError!Instruction {
 
     // Depending on the above parse the rest of the instruction.
     const instruction: Instruction = switch (category) {
-        0x0000 => Instruction{ .CLEAR_SCREEN = {} },
+        0x0000 => switch (opcode) {
+            0x00E0 => Instruction{ .CLEAR_SCREEN = {} },
+            0x00EE => Instruction{ .RETURN = {} },
+            else => return EmulatorError.UNKNOWN_INSTRUCTION,
+        },
         0x1000 => Instruction{ .JUMP = opcode & 0x0FFF },
+        0x2000 => Instruction{ .JUMP_SUBROUTINE = opcode & 0x0FFF },
+        0x3000 => Instruction{ .EQUAL_TO = .{
+            .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            .value = @as(u8, @intCast(opcode & 0x00FF)),
+        } },
+        0x4000 => Instruction{ .EQUAL_TO = .{
+            .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            .value = @as(u8, @intCast(opcode & 0x00FF)),
+        } },
+        0x5000 => Instruction{ .EQUAL_REGISTERS = .{
+            .register_x = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            .register_y = @as(u8, @intCast((opcode & 0x00F0) >> 8)),
+        } },
         0x6000 => Instruction{ .SET_REGISTER = .{
             .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
             .value = @as(u8, @intCast(opcode & 0x00FF)),
@@ -135,6 +170,10 @@ fn fetchInstruction() EmulatorError!Instruction {
         0x7000 => Instruction{ .ADD_REGISTER = .{
             .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
             .value = @as(u8, @intCast(opcode & 0x00FF)),
+        } },
+        0x9000 => Instruction{ .NOT_EQUAL_REGISTERS = .{
+            .register_x = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            .register_y = @as(u8, @intCast((opcode & 0x00F0) >> 8)),
         } },
         0xA000 => Instruction{ .SET_INDEX = opcode & 0x0FFF },
         0xD000 => Instruction{ .DRAW = .{
@@ -155,7 +194,25 @@ fn fetchInstruction() EmulatorError!Instruction {
 fn executeInstruction(instruction: Instruction) !void {
     switch (instruction) {
         Instruction.CLEAR_SCREEN => |_| raylib.clearBackground(BACKGROUND_COLOR),
+        Instruction.RETURN => |_| PC = @as(u16, stack_pop().?),
         Instruction.JUMP => |addr| PC = addr,
+        Instruction.JUMP_SUBROUTINE => |addr| {
+            try stack_push(PC);
+            PC = addr;
+        },
+        Instruction.EQUAL_TO => |v| {
+            const value = try getRegisterValue(v.register);
+            if (value == v.value) PC += 2;
+        },
+        Instruction.NOT_EQUAL_TO => |v| {
+            const value = try getRegisterValue(v.register);
+            if (value != v.value) PC += 2;
+        },
+        Instruction.EQUAL_REGISTERS => |v| {
+            const value_x = try getRegisterValue(v.register_x);
+            const value_y = try getRegisterValue(v.register_y);
+            if (value_x == value_y) PC += 2;
+        },
         Instruction.SET_REGISTER => |v| {
             _ = switch (v.register) {
                 0x00 => V0 = v.value,
@@ -198,6 +255,11 @@ fn executeInstruction(instruction: Instruction) !void {
                 0x0F => VF = VF +% v.value,
                 else => return EmulatorError.UNKNOWN_REGISTER,
             };
+        },
+        Instruction.NOT_EQUAL_REGISTERS => |v| {
+            const value_x = try getRegisterValue(v.register_x);
+            const value_y = try getRegisterValue(v.register_y);
+            if (value_x != value_y) PC += 2;
         },
         Instruction.SET_INDEX => |v| IN = v,
         Instruction.DRAW => |v| {
@@ -251,13 +313,13 @@ fn getRegisterValue(register: u8) EmulatorError!u8 {
 // ======== Stack Functions =======
 const StackError = error{OUT_OF_MEMORY};
 
-fn stack_push(value: u8) StackError!void {
+fn stack_push(value: u16) StackError!void {
     if (SP + 1 > MAX_STACK) return error.OUT_OF_MEMORY;
     STACK[SP] = value;
     SP += 1;
 }
 
-fn stack_pop() ?u8 {
+fn stack_pop() ?u16 {
     if (SP - 1 <= 0) return null;
     const value = STACK[SP];
     SP -= 1;
