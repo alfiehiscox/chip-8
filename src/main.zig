@@ -111,6 +111,7 @@ const Instruction = union(enum) {
     SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
     SET_INDEX: u16, // 0xANNN
     JUMP_WITH_OFFSET: u16, // 0xBNNN or 0xBXNN
+    RANDOM: struct { u8, u8 }, // 0xCXNN
     DRAW: struct { u8, u8, u8 }, // 0xDXYN
 };
 
@@ -228,6 +229,10 @@ fn fetchInstruction() EmulatorError!Instruction {
         } },
         0xA000 => Instruction{ .SET_INDEX = opcode & 0x0FFF },
         0xB000 => Instruction{ .JUMP_WITH_OFFSET = opcode & 0x0FFF },
+        0xC000 => Instruction{ .RANDOM = .{
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast(opcode & 0x00FF)),
+        } },
         0xD000 => Instruction{ .DRAW = .{
             @as(u8, @intCast((opcode & 0x0F00) >> 8)),
             @as(u8, @intCast((opcode & 0x00F0) >> 4)),
@@ -349,6 +354,17 @@ fn executeInstruction(instruction: Instruction) !void {
                     PC = offset + addr;
                 },
             }
+        },
+        Instruction.RANDOM => |v| {
+            // This one might be a little intensive
+            var prng = std.Random.DefaultPrng.init(blk: {
+                var seed: u64 = undefined;
+                try std.posix.getrandom(std.mem.asBytes(&seed));
+                break :blk seed;
+            });
+            const rand = prng.random();
+            const value = rand.int(u8);
+            try setRegisterValue(v[0], value & v[1]);
         },
         Instruction.DRAW => |v| {
             const x = @as(u16, try getRegisterValue(v[0]) % SCREEN_WIDTH);
