@@ -113,6 +113,8 @@ const Instruction = union(enum) {
     JUMP_WITH_OFFSET: u16, // 0xBNNN or 0xBXNN
     RANDOM: struct { u8, u8 }, // 0xCXNN
     DRAW: struct { u8, u8, u8 }, // 0xDXYN
+    SKIP_IF_KEY: u8, // 0xEX9E
+    SKIP_IF_NOT_KEY: u8, // 0xEXA1
 };
 
 const EmulatorError = error{
@@ -238,6 +240,11 @@ fn fetchInstruction() EmulatorError!Instruction {
             @as(u8, @intCast((opcode & 0x00F0) >> 4)),
             @as(u8, @intCast(opcode & 0x000F)),
         } },
+        0xE000 => switch (opcode & 0x00FF) {
+            0x009E => Instruction{ .SKIP_IF_KEY = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x00A1 => Instruction{ .SKIP_IF_NOT_KEY = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            else => return EmulatorError.UNKNOWN_INSTRUCTION,
+        },
         else => {
             std.debug.print("Unknown instruction '{X}'\n", .{opcode});
             return EmulatorError.UNKNOWN_INSTRUCTION;
@@ -389,7 +396,42 @@ fn executeInstruction(instruction: Instruction) !void {
                 }
             }
         },
+        Instruction.SKIP_IF_KEY => |reg| {
+            const key = try getRegisterValue(reg);
+            if (try isKeyBeingPressed(key)) PC += 2;
+        },
+        Instruction.SKIP_IF_NOT_KEY => |reg| {
+            const key = try getRegisterValue(reg);
+            if (!(try isKeyBeingPressed(key))) PC += 2;
+        },
     }
+}
+
+// We map the HP48 calculator layout onto
+fn isKeyBeingPressed(key: u8) !bool {
+    return switch (key) {
+        // [ 1 2 3 C ] == [ 1 2 3 4 ]
+        0x01 => raylib.isKeyDown(raylib.KeyboardKey.key_one),
+        0x02 => raylib.isKeyDown(raylib.KeyboardKey.key_two),
+        0x03 => raylib.isKeyDown(raylib.KeyboardKey.key_three),
+        0x0C => raylib.isKeyDown(raylib.KeyboardKey.key_four),
+        // [ 4 5 6 D ] == [ Q W E R ]
+        0x04 => raylib.isKeyDown(raylib.KeyboardKey.key_q),
+        0x05 => raylib.isKeyDown(raylib.KeyboardKey.key_w),
+        0x06 => raylib.isKeyDown(raylib.KeyboardKey.key_e),
+        0x0D => raylib.isKeyDown(raylib.KeyboardKey.key_r),
+        // [ 7 8 9 E ] == [ A S D F]
+        0x07 => raylib.isKeyDown(raylib.KeyboardKey.key_a),
+        0x08 => raylib.isKeyDown(raylib.KeyboardKey.key_s),
+        0x09 => raylib.isKeyDown(raylib.KeyboardKey.key_d),
+        0x0E => raylib.isKeyDown(raylib.KeyboardKey.key_f),
+        // [ A 0 B F ] == [ Z X C V ]
+        0x0A => raylib.isKeyDown(raylib.KeyboardKey.key_z),
+        0x00 => raylib.isKeyDown(raylib.KeyboardKey.key_x),
+        0x0B => raylib.isKeyDown(raylib.KeyboardKey.key_c),
+        0x0F => raylib.isKeyDown(raylib.KeyboardKey.key_v),
+        else => return EmulatorError.UNKNOWN_REGISTER,
+    };
 }
 
 fn setRegisterValue(register: u8, value: u8) EmulatorError!void {
