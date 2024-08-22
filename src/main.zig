@@ -14,6 +14,11 @@ const EMULARTOR_TYPE = enum { COSMAC_VIP, SUPER_CHIP, CHIP_48 };
 // [here](https://tobiasvl.github.io/blog/write-a-chip-8-emulator/#8xy6-and-8xye-shift) for more.
 const SHIFT_BEHAVIOUR = EMULARTOR_TYPE.COSMAC_VIP;
 
+// The jump with offset instruction 0xBNNN have differing behaviour based on the emulator type.
+// We default to the original. See
+// [here](https://tobiasvl.github.io/blog/write-a-chip-8-emulator/#bnnn-jump-with-offset) for more.
+const JUMP_WITH_OFFSET_BEVHAVIOUR = EMULARTOR_TYPE.COSMAC_VIP;
+
 // Original Chip8 Screen was 64x32 Pixels.
 const SCREEN_WIDTH = 64;
 const SCREEN_HEIGHT = 32;
@@ -105,6 +110,7 @@ const Instruction = union(enum) {
     SUB_Y_X: struct { u8, u8 }, // 0x8XY7
     SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
     SET_INDEX: u16, // 0xANNN
+    JUMP_WITH_OFFSET: u16, // 0xBNNN or 0xBXNN
     DRAW: struct { u8, u8, u8 }, // 0xDXYN
 };
 
@@ -221,6 +227,7 @@ fn fetchInstruction() EmulatorError!Instruction {
             @as(u8, @intCast((opcode & 0x00F0) >> 8)),
         } },
         0xA000 => Instruction{ .SET_INDEX = opcode & 0x0FFF },
+        0xB000 => Instruction{ .JUMP_WITH_OFFSET = opcode & 0x0FFF },
         0xD000 => Instruction{ .DRAW = .{
             @as(u8, @intCast((opcode & 0x0F00) >> 8)),
             @as(u8, @intCast((opcode & 0x00F0) >> 4)),
@@ -330,6 +337,19 @@ fn executeInstruction(instruction: Instruction) !void {
             }
         },
         Instruction.SET_INDEX => |v| IN = v,
+        Instruction.JUMP_WITH_OFFSET => |addr| {
+            switch (JUMP_WITH_OFFSET_BEVHAVIOUR) {
+                EMULARTOR_TYPE.COSMAC_VIP => {
+                    const offset = try getRegisterValue(0);
+                    PC = offset + addr;
+                },
+                else => {
+                    const register = @as(u8, @intCast((addr & 0x0F00) >> 8));
+                    const offset = try getRegisterValue(register);
+                    PC = offset + addr;
+                },
+            }
+        },
         Instruction.DRAW => |v| {
             const x = @as(u16, try getRegisterValue(v[0]) % SCREEN_WIDTH);
             const y = @as(u16, try getRegisterValue(v[1]) % SCREEN_HEIGHT);
