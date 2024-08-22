@@ -4,6 +4,16 @@ const raylib = @import("raylib");
 const FPS = 60;
 const BACKGROUND_COLOR = raylib.Color.black;
 
+// There are a couple different versions of Chip8.
+const EMULARTOR_TYPE = enum { COSMAC_VIP, SUPER_CHIP, CHIP_48 };
+
+// Shift Behaviour
+// The shift instructions 0x8XY6 and 0x8XYE have differing behaviour
+// based on the emulator type.
+// We default to the original. See
+// [here](https://tobiasvl.github.io/blog/write-a-chip-8-emulator/#8xy6-and-8xye-shift) for more.
+const SHIFT_BEHAVIOUR = EMULARTOR_TYPE.COSMAC_VIP;
+
 // Original Chip8 Screen was 64x32 Pixels.
 const SCREEN_WIDTH = 64;
 const SCREEN_HEIGHT = 32;
@@ -30,8 +40,8 @@ var STACK: [MAX_STACK]u16 = [_]u16{0} ** MAX_STACK;
 var IN: u16 = 0;
 
 // Delay and Sound Timers
-var DELAY: u8 = std.math.maxInt(u8);
-var SOUND: u8 = std.math.maxInt(u8);
+var DELAY: u8 = 0;
+var SOUND: u8 = 0;
 
 // Variables
 var V0: u8 = 0;
@@ -75,40 +85,27 @@ const FONT: [80]u8 = [80]u8{
 
 // Instructions
 const Instruction = union(enum) {
-    CLEAR_SCREEN: void,
-    RETURN: void,
-    JUMP: u16,
-    JUMP_SUBROUTINE: u16,
-    EQUAL_TO: struct {
-        register: u8,
-        value: u8,
-    },
-    NOT_EQUAL_TO: struct {
-        register: u8,
-        value: u8,
-    },
-    EQUAL_REGISTERS: struct {
-        register_x: u8,
-        register_y: u8,
-    },
-    NOT_EQUAL_REGISTERS: struct {
-        register_x: u8,
-        register_y: u8,
-    },
-    SET_REGISTER: struct {
-        register: u8,
-        value: u8,
-    },
-    ADD_REGISTER: struct {
-        register: u8,
-        value: u8,
-    },
-    SET_INDEX: u16,
-    DRAW: struct {
-        register_x: u8,
-        register_y: u8,
-        size: u8,
-    },
+    CLEAR_SCREEN: void, // 0x00E0
+    RETURN: void, // 0x00EE
+    JUMP: u16, // 0x1NNN
+    JUMP_SUBROUTINE: u16, // 0x2NNN
+    EQUAL_TO: struct { u8, u8 }, // 0x3XNN
+    NOT_EQUAL_TO: struct { u8, u8 }, // 0x4XNN
+    EQUAL_REGISTERS: struct { u8, u8 }, // 0x5XY0
+    NOT_EQUAL_REGISTERS: struct { u8, u8 }, // 0x9XY0
+    SET_REGISTER: struct { u8, u8 }, // 0x6XNN
+    ADD_REGISTER: struct { u8, u8 }, // 0x7XNN
+    SET_X_Y: struct { u8, u8 }, // 0x8XY0
+    OR_X_Y: struct { u8, u8 }, // 0x8XY1
+    AND_X_Y: struct { u8, u8 }, // 0x8XY2
+    XOR_X_Y: struct { u8, u8 }, // 0x8XY3
+    ADD_X_Y: struct { u8, u8 }, // 0x8XY4
+    SUB_X_Y: struct { u8, u8 }, // 0x8XY5
+    SHIFT_R_X_Y: struct { u8, u8 }, //0x8XY6
+    SUB_Y_X: struct { u8, u8 }, // 0x8XY7
+    SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
+    SET_INDEX: u16, // 0xANNN
+    DRAW: struct { u8, u8, u8 }, // 0xDXYN
 };
 
 const EmulatorError = error{
@@ -147,39 +144,87 @@ fn fetchInstruction() EmulatorError!Instruction {
         0x0000 => switch (opcode) {
             0x00E0 => Instruction{ .CLEAR_SCREEN = {} },
             0x00EE => Instruction{ .RETURN = {} },
-            else => return EmulatorError.UNKNOWN_INSTRUCTION,
+            else => {
+                std.debug.print("Unknown instruction '{X}'\n", .{opcode});
+                return EmulatorError.UNKNOWN_INSTRUCTION;
+            },
         },
         0x1000 => Instruction{ .JUMP = opcode & 0x0FFF },
         0x2000 => Instruction{ .JUMP_SUBROUTINE = opcode & 0x0FFF },
         0x3000 => Instruction{ .EQUAL_TO = .{
-            .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .value = @as(u8, @intCast(opcode & 0x00FF)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast(opcode & 0x00FF)),
         } },
         0x4000 => Instruction{ .EQUAL_TO = .{
-            .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .value = @as(u8, @intCast(opcode & 0x00FF)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast(opcode & 0x00FF)),
         } },
         0x5000 => Instruction{ .EQUAL_REGISTERS = .{
-            .register_x = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .register_y = @as(u8, @intCast((opcode & 0x00F0) >> 8)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast((opcode & 0x00F0) >> 8)),
         } },
         0x6000 => Instruction{ .SET_REGISTER = .{
-            .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .value = @as(u8, @intCast(opcode & 0x00FF)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast(opcode & 0x00FF)),
         } },
         0x7000 => Instruction{ .ADD_REGISTER = .{
-            .register = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .value = @as(u8, @intCast(opcode & 0x00FF)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast(opcode & 0x00FF)),
         } },
+        0x8000 => blk: {
+            const subcategory = @as(u8, @intCast(opcode & 0x000F));
+            break :blk switch (subcategory) {
+                0x00 => Instruction{ .SET_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x01 => Instruction{ .OR_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x02 => Instruction{ .AND_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x03 => Instruction{ .XOR_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x04 => Instruction{ .ADD_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x05 => Instruction{ .SUB_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x06 => Instruction{ .SHIFT_R_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x07 => Instruction{ .SUB_Y_X = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                0x0E => Instruction{ .SHIFT_L_X_Y = .{
+                    @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+                    @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+                } },
+                else => {
+                    std.debug.print("Unknown instruction '{X}'\n", .{opcode});
+                    return EmulatorError.UNKNOWN_INSTRUCTION;
+                },
+            };
+        },
         0x9000 => Instruction{ .NOT_EQUAL_REGISTERS = .{
-            .register_x = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .register_y = @as(u8, @intCast((opcode & 0x00F0) >> 8)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast((opcode & 0x00F0) >> 8)),
         } },
         0xA000 => Instruction{ .SET_INDEX = opcode & 0x0FFF },
         0xD000 => Instruction{ .DRAW = .{
-            .register_x = @as(u8, @intCast((opcode & 0x0F00) >> 8)),
-            .register_y = @as(u8, @intCast((opcode & 0x00F0) >> 4)),
-            .size = @as(u8, @intCast(opcode & 0x000F)),
+            @as(u8, @intCast((opcode & 0x0F00) >> 8)),
+            @as(u8, @intCast((opcode & 0x00F0) >> 4)),
+            @as(u8, @intCast(opcode & 0x000F)),
         } },
         else => {
             std.debug.print("Unknown instruction '{X}'\n", .{opcode});
@@ -201,73 +246,96 @@ fn executeInstruction(instruction: Instruction) !void {
             PC = addr;
         },
         Instruction.EQUAL_TO => |v| {
-            const value = try getRegisterValue(v.register);
-            if (value == v.value) PC += 2;
+            const value = try getRegisterValue(v[0]);
+            if (value == v[1]) PC += 2;
         },
         Instruction.NOT_EQUAL_TO => |v| {
-            const value = try getRegisterValue(v.register);
-            if (value != v.value) PC += 2;
+            const value = try getRegisterValue(v[0]);
+            if (value != v[1]) PC += 2;
         },
         Instruction.EQUAL_REGISTERS => |v| {
-            const value_x = try getRegisterValue(v.register_x);
-            const value_y = try getRegisterValue(v.register_y);
+            const value_x = try getRegisterValue(v[0]);
+            const value_y = try getRegisterValue(v[1]);
             if (value_x == value_y) PC += 2;
         },
-        Instruction.SET_REGISTER => |v| {
-            _ = switch (v.register) {
-                0x00 => V0 = v.value,
-                0x01 => V1 = v.value,
-                0x02 => V2 = v.value,
-                0x03 => V3 = v.value,
-                0x04 => V4 = v.value,
-                0x05 => V5 = v.value,
-                0x06 => V6 = v.value,
-                0x07 => V7 = v.value,
-                0x08 => V8 = v.value,
-                0x09 => V9 = v.value,
-                0x0A => VA = v.value,
-                0x0B => VB = v.value,
-                0x0C => VC = v.value,
-                0x0D => VD = v.value,
-                0x0E => VE = v.value,
-                0x0F => VF = v.value,
-                else => return EmulatorError.UNKNOWN_REGISTER,
-            };
-        },
-        Instruction.ADD_REGISTER => |v| {
-            // We allow for wrapping back around to 0 from 255.
-            _ = switch (v.register) {
-                0x00 => V0 = V0 +% v.value,
-                0x01 => V1 = V1 +% v.value,
-                0x02 => V2 = V2 +% v.value,
-                0x03 => V3 = V3 +% v.value,
-                0x04 => V4 = V4 +% v.value,
-                0x05 => V5 = V5 +% v.value,
-                0x06 => V6 = V6 +% v.value,
-                0x07 => V7 = V7 +% v.value,
-                0x08 => V8 = V8 +% v.value,
-                0x09 => V9 = V9 +% v.value,
-                0x0A => VA = VA +% v.value,
-                0x0B => VB = VB +% v.value,
-                0x0C => VC = VC +% v.value,
-                0x0D => VD = VD +% v.value,
-                0x0E => VE = VE +% v.value,
-                0x0F => VF = VF +% v.value,
-                else => return EmulatorError.UNKNOWN_REGISTER,
-            };
-        },
+        Instruction.SET_REGISTER => |v| try setRegisterValue(v[0], v[1]),
+        Instruction.ADD_REGISTER => |v| try setRegisterValue(v[0], try getRegisterValue(v[0]) +% v[1]),
         Instruction.NOT_EQUAL_REGISTERS => |v| {
-            const value_x = try getRegisterValue(v.register_x);
-            const value_y = try getRegisterValue(v.register_y);
+            const value_x = try getRegisterValue(v[0]);
+            const value_y = try getRegisterValue(v[1]);
             if (value_x != value_y) PC += 2;
+        },
+        Instruction.SET_X_Y => |v| try setRegisterValue(v[0], try getRegisterValue(v[1])),
+        Instruction.OR_X_Y => |v| try setRegisterValue(
+            v[0],
+            try getRegisterValue(v[0]) | try getRegisterValue(v[1]),
+        ),
+        Instruction.AND_X_Y => |v| try setRegisterValue(
+            v[0],
+            try getRegisterValue(v[0]) & try getRegisterValue(v[1]),
+        ),
+        Instruction.XOR_X_Y => |v| try setRegisterValue(
+            v[0],
+            try getRegisterValue(v[0]) ^ try getRegisterValue(v[1]),
+        ),
+        Instruction.ADD_X_Y => |v| {
+            const x = try getRegisterValue(v[0]);
+            const y = try getRegisterValue(v[1]);
+            const add = x +% y;
+            VF = if (add < x) 1 else 0; // if true overflow happened
+            try setRegisterValue(v[0], add);
+        },
+        Instruction.SUB_X_Y => |v| {
+            const x = try getRegisterValue(v[0]);
+            const y = try getRegisterValue(v[1]);
+            VF = if (x > y) 1 else 0;
+            const sub = x -% y;
+            try setRegisterValue(v[0], sub);
+        },
+        Instruction.SUB_Y_X => |v| {
+            const x = try getRegisterValue(v[0]);
+            const y = try getRegisterValue(v[1]);
+            VF = if (y > x) 1 else 0;
+            const sub = y -% x;
+            try setRegisterValue(v[0], sub);
+        },
+        Instruction.SHIFT_R_X_Y => |v| {
+            switch (SHIFT_BEHAVIOUR) {
+                // Only the COSMAC_VIP has different behaviour
+                EMULARTOR_TYPE.COSMAC_VIP => {
+                    const y = try getRegisterValue(v[1]);
+                    VF = @as(u8, @intCast(y & 0b00000001)); // This will be the carry bit
+                    try setRegisterValue(v[0], (y >> 1));
+                },
+                else => {
+                    const x = try getRegisterValue(v[0]);
+                    VF = @as(u8, @intCast(x & 0b00000001)); // This will be the carry bit
+                    try setRegisterValue(v[0], (x >> 1));
+                },
+            }
+        },
+        Instruction.SHIFT_L_X_Y => |v| {
+            switch (SHIFT_BEHAVIOUR) {
+                // Only the COSMAC_VIP has different behaviour
+                EMULARTOR_TYPE.COSMAC_VIP => {
+                    const y = try getRegisterValue(v[1]);
+                    VF = @as(u8, @intCast((y & 0b10000000) >> 7)); // This will be the carry bit
+                    try setRegisterValue(v[0], (y << 1));
+                },
+                else => {
+                    const x = try getRegisterValue(v[0]);
+                    VF = @as(u8, @intCast((x & 0b10000000) >> 7)); // This will be the carry bit
+                    try setRegisterValue(v[0], (x << 1));
+                },
+            }
         },
         Instruction.SET_INDEX => |v| IN = v,
         Instruction.DRAW => |v| {
-            const x = @as(u16, try getRegisterValue(v.register_x) % SCREEN_WIDTH);
-            const y = @as(u16, try getRegisterValue(v.register_y) % SCREEN_HEIGHT);
+            const x = @as(u16, try getRegisterValue(v[0]) % SCREEN_WIDTH);
+            const y = @as(u16, try getRegisterValue(v[1]) % SCREEN_HEIGHT);
             VF = 0x00;
 
-            for (0..v.size) |n| {
+            for (0..v[2]) |n| {
                 if ((y + n) > SCREEN_HEIGHT) continue;
                 const data = MEM[IN + n];
                 for (0..8) |i| {
@@ -286,6 +354,28 @@ fn executeInstruction(instruction: Instruction) !void {
             }
         },
     }
+}
+
+fn setRegisterValue(register: u8, value: u8) EmulatorError!void {
+    return switch (register) {
+        0x00 => V0 = value,
+        0x01 => V1 = value,
+        0x02 => V2 = value,
+        0x03 => V3 = value,
+        0x04 => V4 = value,
+        0x05 => V5 = value,
+        0x06 => V6 = value,
+        0x07 => V7 = value,
+        0x08 => V8 = value,
+        0x09 => V9 = value,
+        0x0A => VA = value,
+        0x0B => VB = value,
+        0x0C => VC = value,
+        0x0D => VD = value,
+        0x0E => VE = value,
+        0x0F => VF = value,
+        else => return EmulatorError.UNKNOWN_REGISTER,
+    };
 }
 
 fn getRegisterValue(register: u8) EmulatorError!u8 {
