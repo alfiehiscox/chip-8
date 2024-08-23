@@ -91,6 +91,26 @@ const FONT: [80]u8 = [80]u8{
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 };
 
+fn printInstruction(instruction: Instruction) !void {
+    switch (instruction) {
+        Instruction.CLEAR_SCREEN => |_| std.debug.print("0x00E0 (Clear Screen)\n", .{}),
+        Instruction.RETURN => |_| std.debug.print("0x00EE (Return)\n", .{}),
+        Instruction.JUMP => |addr| std.debug.print("0x1{X:3} (Jump to address {X:3})\n", .{ addr, addr }),
+        Instruction.JUMP_SUBROUTINE => |addr| std.debug.print("0x2{X:3} (Jump to subroutine {X:3})\n", .{ addr, addr }),
+        Instruction.EQUAL_TO => |v| {
+            const value = try getRegisterValue(v[0]);
+            std.debug.print("0x3{X:1}{X:2} (Condition: {X} == {X})", .{ v[0], v[1], value, v[1] });
+        },
+        Instruction.NOT_EQUAL_TO => |v| {
+            const value = try getRegisterValue(v[0]);
+            std.debug.print("0x3{X:1}{X:2} (Condition: {X} != {X})", .{ v[0], v[1], value, v[1] });
+        },
+        // .. //
+        Instruction.BLOCK_KEY_PRESS => |reg| std.debug.print("0x2{X:1}0A (Block Until a key is press)\n", .{reg}),
+        else => std.debug.print("Unimplented print!\n", .{}),
+    }
+}
+
 // Instructions
 const Instruction = union(enum) {
     CLEAR_SCREEN: void, // 0x00E0
@@ -437,8 +457,10 @@ fn executeInstruction(instruction: Instruction) !void {
         Instruction.BLOCK_KEY_PRESS => |reg| {
             const key = getKeyPress() catch {
                 PC -= 2; // Loop this instruction until key is pressed
+                std.debug.print("No Key Pressed\n", .{});
                 return;
             };
+            std.debug.print("Key Pressed: {X:1}\n", .{key});
             try setRegisterValue(reg, key);
         },
         Instruction.FONT_CHARACTER => |reg| {
@@ -471,6 +493,9 @@ fn executeInstruction(instruction: Instruction) !void {
             MEM[addr + 1] = @divFloor(@mod(value, 100), 10); // Tens
             MEM[addr + 2] = @mod(value, 10); // Ones
         },
+        // For these last two instructions we're going to go with the more modern
+        // approach of using a offset IN rather then incrementing IN.
+        // TODO: Implement and make configurable COSMAC VIP behaviour
         Instruction.STORE => |max_reg| {
             var n: u8 = 0;
             while (n <= max_reg) : (n += 1) {
@@ -593,12 +618,14 @@ fn stack_push(value: u16) StackError!void {
     if (SP + 1 > MAX_STACK) return error.OUT_OF_MEMORY;
     STACK[SP] = value;
     SP += 1;
+    std.debug.print("Stack (Push): {X}\n", .{value});
 }
 
 fn stack_pop() ?u16 {
-    if (SP - 1 <= 0) return null;
-    const value = STACK[SP];
+    if (SP - 1 < 0) return null;
     SP -= 1;
+    const value = STACK[SP];
+    std.debug.print("Stack (Pop): {X}\n", .{value});
     return value;
 }
 
@@ -667,15 +694,20 @@ pub fn main() !void {
 
     var examples = try std.fs.cwd().openDir("examples", .{});
     defer examples.close();
-    const ibmrom = try examples.openFile("IBM_Logo.ch8", .{});
-    defer ibmrom.close();
-    var buf: [256]u8 = undefined;
-    const read = try ibmrom.readAll(&buf);
+
+    // const ibmrom = try examples.openFile("IBM_Logo.ch8", .{});
+    // defer ibmrom.close();
+    const clock = try examples.openFile("Clock_Program.ch8", .{});
+    defer clock.close();
+
+    var buf: [512]u8 = undefined;
+    const read = try clock.readAll(&buf);
 
     initEmulator(buf[0..read]);
 
     // var err: ?[*:0]const u8 = null;
 
+    std.debug.print("\n\n", .{});
     while (!raylib.windowShouldClose()) {
         // Decrement Timers: Not sure of a way to do this
         // independently of execution time.
@@ -693,6 +725,9 @@ pub fn main() !void {
 
         // Fetch Instruction
         const instruction = try fetchInstruction();
+
+        // Print Instruction
+        try printInstruction(instruction);
 
         // Execute Instruction
         try executeInstruction(instruction);
