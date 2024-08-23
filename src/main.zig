@@ -125,6 +125,8 @@ const Instruction = union(enum) {
     BLOCK_KEY_PRESS: u8, // 0xFX0A
     FONT_CHARACTER: u8, // 0xFX29
     BINARY_CODED_CONV: u8, // 0xFX33
+    STORE: u8, // 0xFX55
+    LOAD: u8, // 0xFX65
 };
 
 const EmulatorError = error{
@@ -265,6 +267,8 @@ fn fetchInstruction() EmulatorError!Instruction {
             0x000A => Instruction{ .BLOCK_KEY_PRESS = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x0029 => Instruction{ .FONT_CHARACTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x0033 => Instruction{ .BINARY_CODED_CONV = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x0055 => Instruction{ .STORE = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x0065 => Instruction{ .LOAD = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         },
         else => {
@@ -466,6 +470,20 @@ fn executeInstruction(instruction: Instruction) !void {
             MEM[addr] = @divFloor(value, 100); // Hundreds
             MEM[addr + 1] = @divFloor(@mod(value, 100), 10); // Tens
             MEM[addr + 2] = @mod(value, 10); // Ones
+        },
+        Instruction.STORE => |max_reg| {
+            var n: u8 = 0;
+            while (n <= max_reg) : (n += 1) {
+                const value = try getRegisterValue(n);
+                MEM[IN + n] = value;
+            }
+        },
+        Instruction.LOAD => |max_reg| {
+            var n: u8 = 0;
+            while (n <= max_reg) : (n += 1) {
+                const value = MEM[IN + n];
+                try setRegisterValue(n, value);
+            }
         },
     }
 }
