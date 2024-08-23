@@ -124,6 +124,7 @@ const Instruction = union(enum) {
     ADD_INDEX: u8, // 0xFX1E
     BLOCK_KEY_PRESS: u8, // 0xFX0A
     FONT_CHARACTER: u8, // 0xFX29
+    BINARY_CODED_CONV: u8, // 0xFX33
 };
 
 const EmulatorError = error{
@@ -263,6 +264,7 @@ fn fetchInstruction() EmulatorError!Instruction {
             0x001E => Instruction{ .ADD_INDEX = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x000A => Instruction{ .BLOCK_KEY_PRESS = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x0029 => Instruction{ .FONT_CHARACTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x0033 => Instruction{ .BINARY_CODED_CONV = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         },
         else => {
@@ -456,6 +458,14 @@ fn executeInstruction(instruction: Instruction) !void {
                 0x0F => FONT_START + (font_char * 5),
                 else => return EmulatorError.UNKNOWN_FONT_CHARACTER,
             };
+        },
+        Instruction.BINARY_CODED_CONV => |reg| {
+            const value = try getRegisterValue(reg);
+            const addr = IN;
+
+            MEM[addr] = @divFloor(value, 100); // Hundreds
+            MEM[addr + 1] = @divFloor(@mod(value, 100), 10); // Tens
+            MEM[addr + 2] = @mod(value, 10); // Ones
         },
     }
 }
