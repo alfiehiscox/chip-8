@@ -48,6 +48,9 @@ var IN: u16 = 0;
 var DELAY: u8 = 0;
 var SOUND: u8 = 0;
 
+// Font Start Memory Location
+const FONT_START = 0x050;
+
 // Variables
 var V0: u8 = 0;
 var V1: u8 = 0;
@@ -120,6 +123,7 @@ const Instruction = union(enum) {
     SET_SOUND_FROM_REGISTER: u8, // 0xFX18
     ADD_INDEX: u8, // 0xFX1E
     BLOCK_KEY_PRESS: u8, // 0xFX0A
+    FONT_CHARACTER: u8, // 0xFX29
 };
 
 const EmulatorError = error{
@@ -127,11 +131,12 @@ const EmulatorError = error{
     UNKNOWN_INSTRUCTION,
     UNKNOWN_REGISTER,
     NO_KEY_PRESSED,
+    UNKNOWN_FONT_CHARACTER,
 };
 
 fn initEmulator(program: []u8) void {
     // Load the font into main memory
-    std.mem.copyForwards(u8, MEM[0x050..0x0A0], FONT[0..]);
+    std.mem.copyForwards(u8, MEM[FONT_START .. FONT_START + 80], FONT[0..]);
     // Ensure Program Counter is set to 0x200
     PC = 0x200;
     // Load the program into main memory
@@ -257,6 +262,7 @@ fn fetchInstruction() EmulatorError!Instruction {
             0x0018 => Instruction{ .SET_SOUND_FROM_REGISTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x001E => Instruction{ .ADD_INDEX = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x000A => Instruction{ .BLOCK_KEY_PRESS = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x0029 => Instruction{ .FONT_CHARACTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         },
         else => {
@@ -428,6 +434,28 @@ fn executeInstruction(instruction: Instruction) !void {
                 return;
             };
             try setRegisterValue(reg, key);
+        },
+        Instruction.FONT_CHARACTER => |reg| {
+            const font_char = (try getRegisterValue(reg)) & 0x0F;
+            IN = switch (font_char) {
+                0x00 => FONT_START + (font_char * 5),
+                0x01 => FONT_START + (font_char * 5),
+                0x02 => FONT_START + (font_char * 5),
+                0x03 => FONT_START + (font_char * 5),
+                0x04 => FONT_START + (font_char * 5),
+                0x05 => FONT_START + (font_char * 5),
+                0x06 => FONT_START + (font_char * 5),
+                0x07 => FONT_START + (font_char * 5),
+                0x08 => FONT_START + (font_char * 5),
+                0x09 => FONT_START + (font_char * 5),
+                0x0A => FONT_START + (font_char * 5),
+                0x0B => FONT_START + (font_char * 5),
+                0x0C => FONT_START + (font_char * 5),
+                0x0D => FONT_START + (font_char * 5),
+                0x0E => FONT_START + (font_char * 5),
+                0x0F => FONT_START + (font_char * 5),
+                else => return EmulatorError.UNKNOWN_FONT_CHARACTER,
+            };
         },
     }
 }
