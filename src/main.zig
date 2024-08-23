@@ -119,12 +119,14 @@ const Instruction = union(enum) {
     SET_DELAY_FROM_REGISTER: u8, // 0xFX15
     SET_SOUND_FROM_REGISTER: u8, // 0xFX18
     ADD_INDEX: u8, // 0xFX1E
+    BLOCK_KEY_PRESS: u8, // 0xFX0A
 };
 
 const EmulatorError = error{
     OUT_OF_MEMORY,
     UNKNOWN_INSTRUCTION,
     UNKNOWN_REGISTER,
+    NO_KEY_PRESSED,
 };
 
 fn initEmulator(program: []u8) void {
@@ -254,6 +256,7 @@ fn fetchInstruction() EmulatorError!Instruction {
             0x0015 => Instruction{ .SET_DELAY_FROM_REGISTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x0018 => Instruction{ .SET_SOUND_FROM_REGISTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x001E => Instruction{ .ADD_INDEX = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x000A => Instruction{ .BLOCK_KEY_PRESS = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         },
         else => {
@@ -419,10 +422,44 @@ fn executeInstruction(instruction: Instruction) !void {
         Instruction.SET_DELAY_FROM_REGISTER => |reg| DELAY = try getRegisterValue(reg),
         Instruction.SET_SOUND_FROM_REGISTER => |reg| SOUND = try getRegisterValue(reg),
         Instruction.ADD_INDEX => |reg| IN += try getRegisterValue(reg),
+        Instruction.BLOCK_KEY_PRESS => |reg| {
+            const key = getKeyPress() catch {
+                PC -= 2; // Loop this instruction until key is pressed
+                return;
+            };
+            try setRegisterValue(reg, key);
+        },
     }
 }
 
-// We map the HP48 calculator layout onto
+fn getKeyPress() EmulatorError!u8 {
+    var key = raylib.getKeyPressed();
+    while (key != raylib.KeyboardKey.key_null) {
+        switch (key) {
+            raylib.KeyboardKey.key_one => return 0x01,
+            raylib.KeyboardKey.key_two => return 0x02,
+            raylib.KeyboardKey.key_three => return 0x03,
+            raylib.KeyboardKey.key_four => return 0x0C,
+            raylib.KeyboardKey.key_q => return 0x04,
+            raylib.KeyboardKey.key_w => return 0x05,
+            raylib.KeyboardKey.key_e => return 0x06,
+            raylib.KeyboardKey.key_r => return 0x0D,
+            raylib.KeyboardKey.key_a => return 0x07,
+            raylib.KeyboardKey.key_s => return 0x08,
+            raylib.KeyboardKey.key_d => return 0x09,
+            raylib.KeyboardKey.key_f => return 0x0E,
+            raylib.KeyboardKey.key_z => return 0x0A,
+            raylib.KeyboardKey.key_x => return 0x00,
+            raylib.KeyboardKey.key_c => return 0x0B,
+            raylib.KeyboardKey.key_v => return 0x0F,
+            else => {}, // Ignore everything else
+        }
+        key = raylib.getKeyPressed();
+    }
+    return EmulatorError.NO_KEY_PRESSED;
+}
+
+// We map the HP48 calculator layout onto QWERTY
 fn isKeyBeingPressed(key: u8) !bool {
     return switch (key) {
         // [ 1 2 3 C ] == [ 1 2 3 4 ]
