@@ -115,6 +115,10 @@ const Instruction = union(enum) {
     DRAW: struct { u8, u8, u8 }, // 0xDXYN
     SKIP_IF_KEY: u8, // 0xEX9E
     SKIP_IF_NOT_KEY: u8, // 0xEXA1
+    SET_REGISTER_FROM_DELAY: u8, // 0xFX07
+    SET_DELAY_FROM_REGISTER: u8, // 0xFX15
+    SET_SOUND_FROM_REGISTER: u8, // 0xFX18
+    ADD_INDEX: u8, // 0xFX1E
 };
 
 const EmulatorError = error{
@@ -243,6 +247,13 @@ fn fetchInstruction() EmulatorError!Instruction {
         0xE000 => switch (opcode & 0x00FF) {
             0x009E => Instruction{ .SKIP_IF_KEY = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             0x00A1 => Instruction{ .SKIP_IF_NOT_KEY = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            else => return EmulatorError.UNKNOWN_INSTRUCTION,
+        },
+        0xF000 => switch (opcode & 0x00FF) {
+            0x0007 => Instruction{ .SET_REGISTER_FROM_DELAY = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x0015 => Instruction{ .SET_DELAY_FROM_REGISTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x0018 => Instruction{ .SET_SOUND_FROM_REGISTER = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
+            0x001E => Instruction{ .ADD_INDEX = @as(u8, @intCast((opcode & 0x0F00) >> 8)) },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         },
         else => {
@@ -404,6 +415,10 @@ fn executeInstruction(instruction: Instruction) !void {
             const key = try getRegisterValue(reg);
             if (!(try isKeyBeingPressed(key))) PC += 2;
         },
+        Instruction.SET_REGISTER_FROM_DELAY => |reg| try setRegisterValue(reg, DELAY),
+        Instruction.SET_DELAY_FROM_REGISTER => |reg| DELAY = try getRegisterValue(reg),
+        Instruction.SET_SOUND_FROM_REGISTER => |reg| SOUND = try getRegisterValue(reg),
+        Instruction.ADD_INDEX => |reg| IN += try getRegisterValue(reg),
     }
 }
 
