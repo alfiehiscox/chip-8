@@ -3,6 +3,7 @@ const raylib = @import("raylib");
 
 const FPS = 60;
 const BACKGROUND_COLOR = raylib.Color.black;
+const DEBUG = true;
 
 // There are a couple different versions of Chip8.
 const EMULARTOR_TYPE = enum { COSMAC_VIP, SUPER_CHIP, CHIP_48 };
@@ -95,18 +96,51 @@ fn printInstruction(instruction: Instruction) !void {
     switch (instruction) {
         Instruction.CLEAR_SCREEN => |_| std.debug.print("0x00E0 (Clear Screen)\n", .{}),
         Instruction.RETURN => |_| std.debug.print("0x00EE (Return)\n", .{}),
-        Instruction.JUMP => |addr| std.debug.print("0x1{X:3} (Jump to address {X:3})\n", .{ addr, addr }),
-        Instruction.JUMP_SUBROUTINE => |addr| std.debug.print("0x2{X:3} (Jump to subroutine {X:3})\n", .{ addr, addr }),
+        Instruction.JUMP => |addr| std.debug.print("0x1{X:0>3} (Jump to address {X:0>3})\n", .{ addr, addr }),
+        Instruction.JUMP_SUBROUTINE => |addr| std.debug.print("0x2{X:0>3} (Jump to subroutine {X:0>3})\n", .{ addr, addr }),
         Instruction.EQUAL_TO => |v| {
             const value = try getRegisterValue(v[0]);
-            std.debug.print("0x3{X:1}{X:2} (Condition: {X} == {X})", .{ v[0], v[1], value, v[1] });
+            std.debug.print("0x3{X:1}{X:0>2} (Condition: {X} == {X})\n", .{ v[0], v[1], value, v[1] });
         },
         Instruction.NOT_EQUAL_TO => |v| {
             const value = try getRegisterValue(v[0]);
-            std.debug.print("0x3{X:1}{X:2} (Condition: {X} != {X})", .{ v[0], v[1], value, v[1] });
+            std.debug.print("0x3{X:1}{X:0>2} (Condition: {X} != {X})\n", .{ v[0], v[1], value, v[1] });
+        },
+        Instruction.EQUAL_REGISTERS => |v| {
+            const value_a = try getRegisterValue(v[0]);
+            const value_b = try getRegisterValue(v[1]);
+            std.debug.print("0x5{X:1}{X:1}0 (Condition: Reg {X} == Reg {X})\n", .{ v[0], v[1], value_a, value_b });
+        },
+        Instruction.NOT_EQUAL_REGISTERS => |v| {
+            const value_a = try getRegisterValue(v[0]);
+            const value_b = try getRegisterValue(v[1]);
+            std.debug.print("0x9{X:1}{X:1}0 (Condition: Reg {X} != Reg {X})\n", .{ v[0], v[1], value_a, value_b });
+        },
+        Instruction.SET_REGISTER => |v| std.debug.print("0x6{X:1}{X:0>2} (Set Register V{X:1} to {X:0>2})\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.ADD_REGISTER => |v| {
+            const value = try getRegisterValue(v[0]);
+            std.debug.print("0x7{X:1}{X:0>2} (Add {X:0>2} to Register V{X:1} [{X:0>2}] with result {X:0>2})\n", .{ v[0], v[1], v[1], v[0], value, v[1] + value });
+        },
+        Instruction.SET_X_Y => |v| std.debug.print("0x8{X:1}{X:1}0 (V{X:1} is set to V{X:1})\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.OR_X_Y => |v| std.debug.print("0x8{X:1}{X:1}1 (V{X:1} is set to V{X:1} | V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.AND_X_Y => |v| std.debug.print("0x8{X:1}{X:1}2 (V{X:1} is set to V{X:1} & V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.XOR_X_Y => |v| std.debug.print("0x8{X:1}{X:1}3 (V{X:1} is set to V{X:1} ^ V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.ADD_X_Y => |v| std.debug.print("0x8{X:1}{X:1}4 (V{X:1} is set to V{X:1} + V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.SUB_X_Y => |v| std.debug.print("0x8{X:1}{X:1}5 (V{X:1} is set to V{X:1} - V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.SHIFT_R_X_Y => |v| std.debug.print("0x8{X:1}{X:1}6 (V{X:1} is set to V{X:1} >> 1)\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.SUB_Y_X => |v| std.debug.print("0x8{X:1}{X:1}7 (V{X:1} is set to V{X:1} - V{X:1})\n", .{ v[0], v[1], v[0], v[1], v[0] }),
+        Instruction.SHIFT_L_X_Y => |v| std.debug.print("0x8{X:1}{X:1}E (V{X:1} is set to V{X:1} << 1)\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.SET_INDEX => |v| std.debug.print("0xA{X:0>3} (Set I to {X:0>3})\n", .{ v, v }),
+        // .. //
+        Instruction.DRAW => |v| {
+            const x = try getRegisterValue(v[0]);
+            const y = try getRegisterValue(v[1]);
+            std.debug.print("0xD{X:1}{X:1}{X:1} (Draw Sprite at {X:0>4} to [{d},{d}] with size {X:1})\n", .{ v[0], v[1], v[2], IN, x, y, v[2] });
         },
         // .. //
-        Instruction.BLOCK_KEY_PRESS => |reg| std.debug.print("0x2{X:1}0A (Block Until a key is press)\n", .{reg}),
+        Instruction.BLOCK_KEY_PRESS => |_| {
+            // std.debug.print("0x2{X:1}0A (Block Until a key is press) -- ", .{reg});
+        },
         else => std.debug.print("Unimplented print!\n", .{}),
     }
 }
@@ -188,7 +222,7 @@ fn fetchInstruction() EmulatorError!Instruction {
             0x00E0 => Instruction{ .CLEAR_SCREEN = {} },
             0x00EE => Instruction{ .RETURN = {} },
             else => {
-                std.debug.print("Unknown instruction '{X}'\n", .{opcode});
+                std.debug.print("Unknown instruction '{X:4}'\n", .{opcode});
                 return EmulatorError.UNKNOWN_INSTRUCTION;
             },
         },
@@ -457,7 +491,7 @@ fn executeInstruction(instruction: Instruction) !void {
         Instruction.BLOCK_KEY_PRESS => |reg| {
             const key = getKeyPress() catch {
                 PC -= 2; // Loop this instruction until key is pressed
-                std.debug.print("No Key Pressed\n", .{});
+                // std.debug.print("No Key Pressed\n", .{});
                 return;
             };
             std.debug.print("Key Pressed: {X:1}\n", .{key});
@@ -697,11 +731,13 @@ pub fn main() !void {
 
     // const ibmrom = try examples.openFile("IBM_Logo.ch8", .{});
     // defer ibmrom.close();
-    const clock = try examples.openFile("Clock_Program.ch8", .{});
-    defer clock.close();
+    // const clock = try examples.openFile("Clock_Program.ch8", .{});
+    // defer clock.close();
+    const maze = try examples.openFile("Maze.ch8", .{});
+    defer maze.close();
 
     var buf: [512]u8 = undefined;
-    const read = try clock.readAll(&buf);
+    const read = try maze.readAll(&buf);
 
     initEmulator(buf[0..read]);
 
@@ -727,7 +763,7 @@ pub fn main() !void {
         const instruction = try fetchInstruction();
 
         // Print Instruction
-        try printInstruction(instruction);
+        if (DEBUG) try printInstruction(instruction);
 
         // Execute Instruction
         try executeInstruction(instruction);
