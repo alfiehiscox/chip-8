@@ -70,8 +70,6 @@ var VD: u8 = 0;
 var VE: u8 = 0;
 var VF: u8 = 0;
 
-var global_err: ?[*:0]u8 = null;
-
 // Font
 const FONT: [80]u8 = [80]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -714,13 +712,6 @@ fn isPixelOn(x: u16, y: u16) bool {
     return SCREEN[i] == 1;
 }
 
-// Simple Error Screen
-fn drawError(err: [*:0]const u8) void {
-    raylib.clearBackground(BACKGROUND_COLOR);
-    raylib.drawText("Error:", 2 * SCALAR, 5 * SCALAR, 20, raylib.Color.red);
-    raylib.drawText(err, 2 * SCALAR, 10 * SCALAR, 20, raylib.Color.red);
-}
-
 pub fn main() !void {
     raylib.initWindow(SCREEN_WIDTH * SCALAR, SCREEN_HEIGHT * SCALAR, "Chip8");
     defer raylib.closeWindow();
@@ -752,12 +743,6 @@ pub fn main() !void {
 
         raylib.beginDrawing();
         defer raylib.endDrawing();
-
-        // Render Error
-        if (global_err) |msg| {
-            drawError(msg);
-            continue;
-        }
 
         // Fetch Instruction
         const instruction = try fetchInstruction();
