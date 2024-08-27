@@ -261,6 +261,8 @@ pub const Chip8 = struct {
             },
             Instruction.EQUAL_TO => |v| self.pc += if (try self.getRegisterValue(v[0]) == v[1]) 2 else 0,
             Instruction.NOT_EQUAL_TO => |v| self.pc += if (try self.getRegisterValue(v[0]) != v[1]) 2 else 0,
+            Instruction.EQUAL_REGISTERS => |v| self.pc += if (try self.getRegisterValue(v[0]) == try self.getRegisterValue(v[1])) 2 else 0,
+            Instruction.NOT_EQUAL_REGISTERS => |v| self.pc += if (try self.getRegisterValue(v[0]) != try self.getRegisterValue(v[1])) 2 else 0,
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -471,8 +473,52 @@ test "Execute Equal Too (0x4XNN)" {
 
     emulator.registers[1] = 0xAA;
 
-    var opcode: [8]u8 = .{ 0x41, 0xFF, 0x00, 0xE0, 0x41, 0xAA, 0x00, 0xE0 };
-    emulator.load(&opcode);
+    var opcodes: [8]u8 = .{ 0x41, 0xFF, 0x00, 0xE0, 0x41, 0xAA, 0x00, 0xE0 };
+    emulator.load(&opcodes);
+
+    const instruction1 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x204, emulator.pc);
+
+    const instruction2 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0x206, emulator.pc);
+}
+
+test "Execute Equal Registers (0x5XY0)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0xAA;
+    emulator.registers[2] = 0xAA;
+    emulator.registers[3] = 0xBB;
+
+    var opcodes: [8]u8 = .{ 0x51, 0x20, 0x00, 0xE0, 0x51, 0x30, 0x00, 0xE0 };
+    emulator.load(&opcodes);
+
+    const instruction1 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x204, emulator.pc);
+
+    const instruction2 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0x206, emulator.pc);
+}
+
+test "Execute Not Equal Registers (0x9XY0)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0xBB;
+    emulator.registers[2] = 0xAA;
+    emulator.registers[3] = 0xBB;
+
+    var opcodes: [8]u8 = .{ 0x91, 0x20, 0x00, 0xE0, 0x91, 0x30, 0x00, 0xE0 };
+    emulator.load(&opcodes);
 
     const instruction1 = try emulator.fetchInstruction();
     try emulator.executeInstruction(instruction1);
