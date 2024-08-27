@@ -259,6 +259,8 @@ pub const Chip8 = struct {
                 self.stack.append(self.pc) catch return EmulatorError.STACK_ERROR;
                 self.pc = addr;
             },
+            Instruction.EQUAL_TO => |v| self.pc += if (try self.getRegisterValue(v[0]) == v[1]) 2 else 0,
+            Instruction.NOT_EQUAL_TO => |v| self.pc += if (try self.getRegisterValue(v[0]) != v[1]) 2 else 0,
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -441,4 +443,44 @@ test "Execute Jump With Subroutine (0x2NNN)" {
     try testing.expectEqual(0x123, emulator.pc);
     try testing.expectEqual(emulator.stack.items.len, 1);
     try testing.expectEqual(emulator.stack.items[0], 0x202);
+}
+
+test "Execute Equal Too (0x3XNN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0xFF;
+
+    var opcode: [8]u8 = .{ 0x31, 0xFF, 0x00, 0xE0, 0x31, 0xAA, 0x00, 0xE0 };
+    emulator.load(&opcode);
+
+    const instruction1 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x204, emulator.pc);
+
+    const instruction2 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0x206, emulator.pc);
+}
+
+test "Execute Equal Too (0x4XNN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0xAA;
+
+    var opcode: [8]u8 = .{ 0x41, 0xFF, 0x00, 0xE0, 0x41, 0xAA, 0x00, 0xE0 };
+    emulator.load(&opcode);
+
+    const instruction1 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x204, emulator.pc);
+
+    const instruction2 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0x206, emulator.pc);
 }
