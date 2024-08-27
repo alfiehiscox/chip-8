@@ -265,15 +265,6 @@ pub const Chip8 = struct {
             Instruction.NOT_EQUAL_REGISTERS => |v| self.pc += if (try self.getRegisterValue(v[0]) != try self.getRegisterValue(v[1])) 2 else 0,
             Instruction.SET_REGISTER => |v| try self.setRegisterValue(v[0], v[1]),
             Instruction.ADD_REGISTER => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) +% v[1]),
-            // SET_X_Y: struct { u8, u8 }, // 0x8XY0
-            // OR_X_Y: struct { u8, u8 }, // 0x8XY1
-            // AND_X_Y: struct { u8, u8 }, // 0x8XY2
-            // XOR_X_Y: struct { u8, u8 }, // 0x8XY3
-            // ADD_X_Y: struct { u8, u8 }, // 0x8XY4
-            // SUB_X_Y: struct { u8, u8 }, // 0x8XY5
-            // SHIFT_R_X_Y: struct { u8, u8 }, //0x8XY6
-            // SUB_Y_X: struct { u8, u8 }, // 0x8XY7
-            // SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
             Instruction.SET_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[1])),
             Instruction.OR_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) | try self.getRegisterValue(v[1])),
             Instruction.AND_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) & try self.getRegisterValue(v[1])),
@@ -326,6 +317,20 @@ pub const Chip8 = struct {
                         const x = try self.getRegisterValue(v[0]);
                         self.registers[0x0F] = @as(u8, @intCast((x & 0b10000000) >> 7)); // This will be the carry bit
                         try self.setRegisterValue(v[0], (x << 1));
+                    },
+                }
+            },
+            Instruction.SET_INDEX => |addr| self.i = addr,
+            Instruction.JUMP_WITH_OFFSET => |addr| {
+                switch (self.emulatorType) {
+                    EmulatorType.COSMAC_VIP => {
+                        const offset = try self.getRegisterValue(0);
+                        self.pc = offset + addr;
+                    },
+                    else => {
+                        const register = @as(u8, @intCast((addr & 0x0F00) >> 8));
+                        const offset = try self.getRegisterValue(register);
+                        self.pc = offset + addr;
                     },
                 }
             },
@@ -825,4 +830,42 @@ test "Execute Shift Left X and Y [CHIP-48 and SUPER-CHIP] (0x8XYE)" {
 
     try testing.expectEqual(0x01, emulator.registers[0x0F]); // Carry Bit
     try testing.expectEqual(0x00, emulator.registers[1]);
+}
+
+// SET_INDEX: u16, // 0xANNN
+test "Execute Set Index (0xANNN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    const instruction = Instruction{ .SET_INDEX = 0x333 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x333, emulator.i);
+}
+
+// JUMP_WITH_OFFSET: u16, // 0xBNNN or 0xBXNN
+test "Execute Jump With Offset (0xBNNN) [COSMAC-VIP]" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[0] = 0x11;
+
+    const instruction = Instruction{ .JUMP_WITH_OFFSET = 0x333 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x344, emulator.pc);
+}
+
+test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
+    var emulator = try Chip8.init(testing.allocator, EmulatorOptions{
+        .emulatorType = EmulatorType.CHIP_48,
+    });
+    defer emulator.deinit();
+
+    emulator.registers[3] = 0x11;
+
+    const instruction = Instruction{ .JUMP_WITH_OFFSET = 0x333 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x344, emulator.pc);
 }
