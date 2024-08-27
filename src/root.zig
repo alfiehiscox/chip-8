@@ -263,6 +263,8 @@ pub const Chip8 = struct {
             Instruction.NOT_EQUAL_TO => |v| self.pc += if (try self.getRegisterValue(v[0]) != v[1]) 2 else 0,
             Instruction.EQUAL_REGISTERS => |v| self.pc += if (try self.getRegisterValue(v[0]) == try self.getRegisterValue(v[1])) 2 else 0,
             Instruction.NOT_EQUAL_REGISTERS => |v| self.pc += if (try self.getRegisterValue(v[0]) != try self.getRegisterValue(v[1])) 2 else 0,
+            Instruction.SET_REGISTER => |v| try self.setRegisterValue(v[0], v[1]),
+            Instruction.ADD_REGISTER => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) +% v[1]),
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -529,4 +531,35 @@ test "Execute Not Equal Registers (0x9XY0)" {
     try emulator.executeInstruction(instruction2);
 
     try testing.expectEqual(0x206, emulator.pc);
+}
+
+test "Execute Set Register (0x6XNN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    const instruction = Instruction{ .SET_REGISTER = .{ 0x01, 0xFF } };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0xFF, emulator.registers[1]);
+}
+
+test "Execute Add Register (0x7XNN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    // Non Wrapping
+    emulator.registers[1] = 0x02;
+
+    const instruction1 = Instruction{ .ADD_REGISTER = .{ 0x01, 0x05 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x07, emulator.registers[1]);
+
+    // Wrapping
+    emulator.registers[1] = 0xFF;
+
+    const instruction2 = Instruction{ .ADD_REGISTER = .{ 0x01, 0x05 } };
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0x04, emulator.registers[1]);
 }
