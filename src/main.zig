@@ -117,7 +117,7 @@ fn printInstruction(instruction: Instruction) !void {
         Instruction.SET_REGISTER => |v| std.debug.print("0x6{X:1}{X:0>2} (Set Register V{X:1} to {X:0>2})\n", .{ v[0], v[1], v[0], v[1] }),
         Instruction.ADD_REGISTER => |v| {
             const value = try getRegisterValue(v[0]);
-            std.debug.print("0x7{X:1}{X:0>2} (Add {X:0>2} to Register V{X:1} [{X:0>2}] with result {X:0>2})\n", .{ v[0], v[1], v[1], v[0], value, v[1] + value });
+            std.debug.print("0x7{X:1}{X:0>2} (Add {X:0>2} to Register V{X:1} [{X:0>2}])\n", .{ v[0], v[1], v[1], v[0], value });
         },
         Instruction.SET_X_Y => |v| std.debug.print("0x8{X:1}{X:1}0 (V{X:1} is set to V{X:1})\n", .{ v[0], v[1], v[0], v[1] }),
         Instruction.OR_X_Y => |v| std.debug.print("0x8{X:1}{X:1}1 (V{X:1} is set to V{X:1} | V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
@@ -724,11 +724,15 @@ pub fn main() !void {
     // defer ibmrom.close();
     // const clock = try examples.openFile("Clock_Program.ch8", .{});
     // defer clock.close();
-    const maze = try examples.openFile("Maze.ch8", .{});
-    defer maze.close();
+    // const maze = try examples.openFile("Maze.ch8", .{});
+    // defer maze.close();
+    // const airplane = try examples.openFile("Airplane.ch8", .{});
+    // defer airplane.close();
+    const particle = try examples.openFile("Particle_Demo.ch8", .{});
+    defer particle.close();
 
     var buf: [512]u8 = undefined;
-    const read = try maze.readAll(&buf);
+    const read = try particle.readAll(&buf);
 
     initEmulator(buf[0..read]);
 
