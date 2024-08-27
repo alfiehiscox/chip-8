@@ -47,7 +47,7 @@ const EmulatorError = error{
 };
 
 // Options
-pub const ChipOptions = struct {
+pub const EmulatorOptions = struct {
     emulatorType: ?EmulatorType = null,
 };
 
@@ -70,7 +70,7 @@ pub const Chip8 = struct {
 
     const This = @This();
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: ChipOptions) !This {
+    pub fn init(allocator: std.mem.Allocator, comptime options: EmulatorOptions) !This {
         const screen = try allocator.alloc(u8, DIMS);
         errdefer allocator.free(screen);
 
@@ -265,6 +265,70 @@ pub const Chip8 = struct {
             Instruction.NOT_EQUAL_REGISTERS => |v| self.pc += if (try self.getRegisterValue(v[0]) != try self.getRegisterValue(v[1])) 2 else 0,
             Instruction.SET_REGISTER => |v| try self.setRegisterValue(v[0], v[1]),
             Instruction.ADD_REGISTER => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) +% v[1]),
+            // SET_X_Y: struct { u8, u8 }, // 0x8XY0
+            // OR_X_Y: struct { u8, u8 }, // 0x8XY1
+            // AND_X_Y: struct { u8, u8 }, // 0x8XY2
+            // XOR_X_Y: struct { u8, u8 }, // 0x8XY3
+            // ADD_X_Y: struct { u8, u8 }, // 0x8XY4
+            // SUB_X_Y: struct { u8, u8 }, // 0x8XY5
+            // SHIFT_R_X_Y: struct { u8, u8 }, //0x8XY6
+            // SUB_Y_X: struct { u8, u8 }, // 0x8XY7
+            // SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
+            Instruction.SET_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[1])),
+            Instruction.OR_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) | try self.getRegisterValue(v[1])),
+            Instruction.AND_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) & try self.getRegisterValue(v[1])),
+            Instruction.XOR_X_Y => |v| try self.setRegisterValue(v[0], try self.getRegisterValue(v[0]) ^ try self.getRegisterValue(v[1])),
+            Instruction.ADD_X_Y => |v| {
+                const x = try self.getRegisterValue(v[0]);
+                const y = try self.getRegisterValue(v[1]);
+                const add = x +% y;
+                self.registers[0x0F] = if (add < x) 1 else 0;
+                try self.setRegisterValue(v[0], add);
+            },
+            Instruction.SUB_X_Y => |v| {
+                const x = try self.getRegisterValue(v[0]);
+                const y = try self.getRegisterValue(v[1]);
+                self.registers[0x0F] = if (x > y) 1 else 0;
+                const sub = x -% y;
+                try self.setRegisterValue(v[0], sub);
+            },
+            Instruction.SUB_Y_X => |v| {
+                const x = try self.getRegisterValue(v[0]);
+                const y = try self.getRegisterValue(v[1]);
+                self.registers[0x0F] = if (y > x) 1 else 0;
+                const sub = y -% x;
+                try self.setRegisterValue(v[0], sub);
+            },
+            Instruction.SHIFT_R_X_Y => |v| {
+                switch (self.emulatorType) {
+                    // Only the COSMAC_VIP has different behaviour
+                    EmulatorType.COSMAC_VIP => {
+                        const y = try self.getRegisterValue(v[1]);
+                        self.registers[0x0F] = @as(u8, @intCast(y & 0b00000001)); // This will be the carry bit
+                        try self.setRegisterValue(v[0], (y >> 1));
+                    },
+                    else => {
+                        const x = try self.getRegisterValue(v[0]);
+                        self.registers[0x0F] = @as(u8, @intCast(x & 0b00000001)); // This will be the carry bit
+                        try self.setRegisterValue(v[0], (x >> 1));
+                    },
+                }
+            },
+            Instruction.SHIFT_L_X_Y => |v| {
+                switch (self.emulatorType) {
+                    // Only the COSMAC_VIP has different behaviour
+                    EmulatorType.COSMAC_VIP => {
+                        const y = try self.getRegisterValue(v[1]);
+                        self.registers[0x0F] = @as(u8, @intCast((y & 0b10000000) >> 7)); // This will be the carry bit
+                        try self.setRegisterValue(v[0], (y << 1));
+                    },
+                    else => {
+                        const x = try self.getRegisterValue(v[0]);
+                        self.registers[0x0F] = @as(u8, @intCast((x & 0b10000000) >> 7)); // This will be the carry bit
+                        try self.setRegisterValue(v[0], (x << 1));
+                    },
+                }
+            },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -562,4 +626,203 @@ test "Execute Add Register (0x7XNN)" {
     try emulator.executeInstruction(instruction2);
 
     try testing.expectEqual(0x04, emulator.registers[1]);
+}
+
+test "Execute Set X to Y (0x8XY0)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0x02;
+    emulator.registers[0] = 0xFF;
+
+    const instruction1 = Instruction{ .SET_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0xFF, emulator.registers[1]);
+}
+
+// OR_X_Y: struct { u8, u8 }, // 0x8XY1
+test "Execute Or X and Y (0x8XY1)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0x02;
+    emulator.registers[0] = 0x05;
+
+    const instruction1 = Instruction{ .OR_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x07, emulator.registers[1]);
+}
+
+// AND_X_Y: struct { u8, u8 }, // 0x8XY2
+test "Execute AND X and Y (0x8XY2)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0x03;
+    emulator.registers[0] = 0x05;
+
+    const instruction1 = Instruction{ .AND_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x01, emulator.registers[1]);
+}
+
+// XOR_X_Y: struct { u8, u8 }, // 0x8XY3
+test "Execute XOR X and Y (0x8XY3)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0x03;
+    emulator.registers[0] = 0x05;
+
+    const instruction1 = Instruction{ .XOR_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x06, emulator.registers[1]);
+}
+
+// ADD_X_Y: struct { u8, u8 }, // 0x8XY4
+test "Execute ADD X and Y with Overflow (0x8XY4)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    // Non wrapping
+    emulator.registers[1] = 0x03;
+    emulator.registers[0] = 0x05;
+
+    const instruction1 = Instruction{ .ADD_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x08, emulator.registers[1]);
+    try testing.expectEqual(0x00, emulator.registers[0xF]);
+
+    // Wrapping
+    emulator.registers[1] = 0xFE;
+    emulator.registers[0] = 0x05;
+
+    const instruction2 = Instruction{ .ADD_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0x03, emulator.registers[1]);
+    try testing.expectEqual(0x01, emulator.registers[0xF]);
+}
+
+// SUB_X_Y: struct { u8, u8 }, // 0x8XY5
+test "Execute SUB X and Y with Overflow (0x8XY5)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    // Non wrapping
+    emulator.registers[1] = 0x05;
+    emulator.registers[0] = 0x03;
+
+    const instruction1 = Instruction{ .SUB_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x02, emulator.registers[1]);
+    try testing.expectEqual(0x01, emulator.registers[0xF]);
+
+    // Wrapping
+    emulator.registers[1] = 0x01;
+    emulator.registers[0] = 0x05;
+
+    const instruction2 = Instruction{ .SUB_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0xFC, emulator.registers[1]);
+    try testing.expectEqual(0x00, emulator.registers[0xF]);
+}
+
+// SUB_Y_X: struct { u8, u8 }, // 0x8XY7
+test "Execute SUB Y and X with Overflow (0x8XY7)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    // Non wrapping
+    emulator.registers[0] = 0x05;
+    emulator.registers[1] = 0x03;
+
+    const instruction1 = Instruction{ .SUB_Y_X = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x02, emulator.registers[1]);
+    try testing.expectEqual(0x01, emulator.registers[0xF]);
+
+    // Wrapping
+    emulator.registers[0] = 0x01;
+    emulator.registers[1] = 0x05;
+
+    const instruction2 = Instruction{ .SUB_Y_X = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(0xFC, emulator.registers[1]);
+    try testing.expectEqual(0x00, emulator.registers[0xF]);
+}
+
+// SHIFT_R_X_Y: struct { u8, u8 }, //0x8XY6
+test "Execute Shift Right X and Y [COSMAC-VIP] (0x8XY6)" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
+    );
+    defer emulator.deinit();
+
+    emulator.registers[0] = 0x11;
+
+    const instruction = Instruction{ .SHIFT_R_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x01, emulator.registers[0x0F]); // Carry Bit
+    try testing.expectEqual(0x08, emulator.registers[1]);
+}
+
+test "Execute Shift Right X and Y [CHIP-48 and SUPER-CHIP] (0x8XY6)" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.SUPER_CHIP },
+    );
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0x10;
+
+    const instruction = Instruction{ .SHIFT_R_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x00, emulator.registers[0x0F]); // Carry Bit
+    try testing.expectEqual(0x08, emulator.registers[1]);
+}
+
+// SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
+test "Execute Shift Left X and Y [COSMAC-VIP] (0x8XYE)" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
+    );
+    defer emulator.deinit();
+
+    emulator.registers[0] = 0x81;
+
+    const instruction = Instruction{ .SHIFT_L_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x01, emulator.registers[0x0F]); // Carry Bit
+    try testing.expectEqual(0x02, emulator.registers[1]);
+}
+
+test "Execute Shift Left X and Y [CHIP-48 and SUPER-CHIP] (0x8XYE)" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.CHIP_48 },
+    );
+    defer emulator.deinit();
+
+    emulator.registers[1] = 0x80;
+
+    const instruction = Instruction{ .SHIFT_L_X_Y = .{ 0x01, 0x00 } };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x01, emulator.registers[0x0F]); // Carry Bit
+    try testing.expectEqual(0x00, emulator.registers[1]);
 }
