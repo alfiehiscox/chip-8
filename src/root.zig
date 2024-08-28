@@ -66,6 +66,9 @@ pub const Chip8 = struct {
 
     stack: std.ArrayList(u16),
 
+    delay: u8,
+    sound: u8,
+
     // TODO: We need a renderer interface
 
     const This = @This();
@@ -100,6 +103,9 @@ pub const Chip8 = struct {
             .registers = registers,
 
             .stack = stack,
+
+            .delay = 0,
+            .sound = 0,
         };
     }
 
@@ -334,6 +340,9 @@ pub const Chip8 = struct {
                     },
                 }
             },
+            Instruction.SET_REGISTER_FROM_DELAY => |reg| try self.setRegisterValue(reg, self.delay),
+            Instruction.SET_DELAY_FROM_REGISTER => |reg| self.delay = try self.getRegisterValue(reg),
+            Instruction.SET_SOUND_FROM_REGISTER => |reg| self.sound = try self.getRegisterValue(reg),
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -394,13 +403,16 @@ const Instruction = union(enum) {
     LOAD: u8, // 0xFX65
 };
 
-// ======== TESTING ==========
+// ===================================================================
+// ============================ TESTING ==============================
+// ===================================================================
+
 test "Chip 8 Init" {
     const chip8 = try Chip8.init(testing.allocator, .{});
     defer chip8.deinit();
 }
 
-test "Fetch Instruction" {
+test "Fetch All Instruction" {
     // All opcodes in order of Instruction Enum
     var opcodes: [68]u8 = [_]u8{
         0x00, 0xE0, 0x00, 0xEE, 0x11, 0x23, 0x21, 0x23,
@@ -869,3 +881,54 @@ test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
 
     try testing.expectEqual(0x344, emulator.pc);
 }
+
+// RANDOM: struct { u8, u8 }, // 0xCXNN    TODO
+// DRAW: struct { u8, u8, u8 }, // 0xDXYN  TODO
+// SKIP_IF_KEY: u8, // 0xEX9E              TODO
+// SKIP_IF_NOT_KEY: u8, // 0xEXA1          TODO
+
+// SET_REGISTER_FROM_DELAY: u8, // 0xFX07
+test "Execute Set Register From Delay (0xFX07)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.delay = 0x2F;
+
+    const instruction = Instruction{ .SET_REGISTER_FROM_DELAY = 0x03 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x2F, emulator.registers[3]);
+}
+
+// SET_DELAY_FROM_REGISTER: u8, // 0xFX15
+test "Execute Delay From Register (0xFX15)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[3] = 0x2F;
+
+    const instruction = Instruction{ .SET_DELAY_FROM_REGISTER = 0x03 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x2F, emulator.delay);
+}
+
+// SET_SOUND_FROM_REGISTER: u8, // 0xFX18
+test "Execute Set Sound From Register (0xFX18)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[3] = 0x2F;
+
+    const instruction = Instruction{ .SET_SOUND_FROM_REGISTER = 0x03 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x2F, emulator.sound);
+}
+
+// ADD_INDEX: u8, // 0xFX1E  TODO
+// BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
+// FONT_CHARACTER: u8, // 0xFX29  TODO
+// BINARY_CODED_CONV: u8, // 0xFX33  TODO
+// STORE: u8, // 0xFX55  TODO
+// LOAD: u8, // 0xFX65  TODO
