@@ -343,6 +343,10 @@ pub const Chip8 = struct {
             Instruction.SET_REGISTER_FROM_DELAY => |reg| try self.setRegisterValue(reg, self.delay),
             Instruction.SET_DELAY_FROM_REGISTER => |reg| self.delay = try self.getRegisterValue(reg),
             Instruction.SET_SOUND_FROM_REGISTER => |reg| self.sound = try self.getRegisterValue(reg),
+            Instruction.ADD_INDEX => |reg| {
+                self.i += try self.getRegisterValue(reg);
+                if (self.i > 0x0FFF) self.registers[0x0F] = 1; // This is extra behaviour
+            },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -926,7 +930,34 @@ test "Execute Set Sound From Register (0xFX18)" {
     try testing.expectEqual(0x2F, emulator.sound);
 }
 
-// ADD_INDEX: u8, // 0xFX1E  TODO
+// ADD_INDEX: u8, // 0xFX1E
+test "Execute Add Index (0xFX1E)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.i = 0x11;
+    emulator.registers[1] = 0x11;
+
+    const instruction = Instruction{ .ADD_INDEX = 0x01 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x22, emulator.i);
+}
+
+test "Execute Add Index with overflow (0xFX1E)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.i = 0x0FFF;
+    emulator.registers[1] = 0x02;
+
+    const instruction = Instruction{ .ADD_INDEX = 0x01 };
+    try emulator.executeInstruction(instruction);
+
+    try testing.expectEqual(0x1001, emulator.i);
+    try testing.expectEqual(0x01, emulator.registers[0x0F]);
+}
+
 // BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
 // FONT_CHARACTER: u8, // 0xFX29  TODO
 // BINARY_CODED_CONV: u8, // 0xFX33  TODO
