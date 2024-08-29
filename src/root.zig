@@ -348,6 +348,11 @@ pub const Chip8 = struct {
                 if (self.i > 0x0FFF) self.registers[0x0F] = 1; // This is extra behaviour
             },
             //..//
+            Instruction.FONT_CHARACTER => |reg| {
+                const char = (try self.getRegisterValue(reg)) & 0x0F;
+                if (char >= 16) return EmulatorError.UNKNOWN_FONT_CHARACTER;
+                self.i = FONT_START + char * 5;
+            },
             Instruction.STORE => |max_reg| {
                 switch (self.emulatorType) {
                     EmulatorType.COSMAC_VIP => {
@@ -1000,10 +1005,40 @@ test "Execute Add Index with overflow (0xFX1E)" {
 // BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
 
 // FONT_CHARACTER: u8, // 0xFX29  TODO
+test "Execute Font Character (0xFX29)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    const font_addresses: [16]u16 = [_]u16{
+        FONT_START + 0 * 5, // 0x0
+        FONT_START + 1 * 5, // 0x1
+        FONT_START + 2 * 5, // 0x2
+        FONT_START + 3 * 5, // 0x3
+        FONT_START + 4 * 5, // 0x4
+        FONT_START + 5 * 5, // 0x5
+        FONT_START + 6 * 5, // 0x6
+        FONT_START + 7 * 5, // 0x7
+        FONT_START + 8 * 5, // 0x8
+        FONT_START + 9 * 5, // 0x9
+        FONT_START + 10 * 5, // 0xA
+        FONT_START + 11 * 5, // 0xB
+        FONT_START + 12 * 5, // 0xC
+        FONT_START + 13 * 5, // 0xD
+        FONT_START + 14 * 5, // 0xE
+        FONT_START + 15 * 5, // 0xF
+    };
+
+    for (0..16) |n| {
+        const int_n = @as(u8, @intCast(n));
+        emulator.registers[1] = int_n;
+        const instruction = Instruction{ .FONT_CHARACTER = 0x01 };
+        try emulator.executeInstruction(instruction);
+        try testing.expectEqual(font_addresses[n], emulator.i);
+    }
+}
 
 // BINARY_CODED_CONV: u8, // 0xFX33  TODO
 
-// STORE: u8, // 0xFX55  TODO
 test "Execute Store (0xFX55) [COSMAC-VIP]" {
     var emulator = try Chip8.init(
         testing.allocator,
@@ -1072,7 +1107,6 @@ test "Execute Store (0xFX55) [CHIP-48 and SUPER-CHIP]" {
     try testing.expectEqual(0x0300, emulator.i);
 }
 
-// LOAD: u8, // 0xFX65  TODO
 test "Execute Load (0xFX65) [COSMAC-VIP]" {
     var emulator = try Chip8.init(
         testing.allocator,
