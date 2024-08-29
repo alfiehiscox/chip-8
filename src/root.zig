@@ -1,13 +1,7 @@
-//                   A different tact
-// ---------------------------------------------------------
-// Using zig's composite structures to extract out the chip8
-// emulator into a library so that it is more modular and
-// testable.
-
 const std = @import("std");
 const testing = std.testing;
 
-// Original Chip8 Screen was 64x32 Pixels.
+// Original Chip8 Screen was 64x32 Pixels. TODO: Make this configurable
 const SCREEN_WIDTH = 64;
 const SCREEN_HEIGHT = 32;
 const DIMS = SCREEN_WIDTH * SCREEN_HEIGHT;
@@ -298,30 +292,28 @@ pub const Chip8 = struct {
             },
             Instruction.SHIFT_R_X_Y => |v| {
                 switch (self.emulatorType) {
-                    // Only the COSMAC_VIP has different behaviour
                     EmulatorType.COSMAC_VIP => {
                         const y = try self.getRegisterValue(v[1]);
-                        self.registers[0x0F] = @as(u8, @intCast(y & 0b00000001)); // This will be the carry bit
+                        self.registers[0x0F] = @as(u8, @intCast(y & 0b00000001)); // carry bit
                         try self.setRegisterValue(v[0], (y >> 1));
                     },
                     else => {
                         const x = try self.getRegisterValue(v[0]);
-                        self.registers[0x0F] = @as(u8, @intCast(x & 0b00000001)); // This will be the carry bit
+                        self.registers[0x0F] = @as(u8, @intCast(x & 0b00000001)); // carry bit
                         try self.setRegisterValue(v[0], (x >> 1));
                     },
                 }
             },
             Instruction.SHIFT_L_X_Y => |v| {
                 switch (self.emulatorType) {
-                    // Only the COSMAC_VIP has different behaviour
                     EmulatorType.COSMAC_VIP => {
                         const y = try self.getRegisterValue(v[1]);
-                        self.registers[0x0F] = @as(u8, @intCast((y & 0b10000000) >> 7)); // This will be the carry bit
+                        self.registers[0x0F] = @as(u8, @intCast((y & 0b10000000) >> 7)); // carry bit
                         try self.setRegisterValue(v[0], (y << 1));
                     },
                     else => {
                         const x = try self.getRegisterValue(v[0]);
-                        self.registers[0x0F] = @as(u8, @intCast((x & 0b10000000) >> 7)); // This will be the carry bit
+                        self.registers[0x0F] = @as(u8, @intCast((x & 0b10000000) >> 7)); // carry bit
                         try self.setRegisterValue(v[0], (x << 1));
                     },
                 }
@@ -338,6 +330,29 @@ pub const Chip8 = struct {
                         const offset = try self.getRegisterValue(register);
                         self.pc = offset + addr;
                     },
+                }
+            },
+            Instruction.DRAW => |v| {
+                const x = @as(u16, try self.getRegisterValue(v[0]) % SCREEN_WIDTH);
+                const y = @as(u16, try self.getRegisterValue(v[1]) % SCREEN_HEIGHT);
+                self.registers[0x0F] = 0x00;
+
+                for (0..v[2]) |n| {
+                    if ((y + n) > SCREEN_HEIGHT) continue;
+                    const data = self.memory[self.i + n];
+                    for (0..8) |i| {
+                        if ((x + i) > SCREEN_WIDTH) continue;
+                        const bit_index = @as(u3, @intCast(7 - i));
+                        const bit = (data >> bit_index) & 1;
+                        if (bit == 1) {
+                            if (self.isPixelOn(@as(u16, @intCast(x + i)), @as(u16, @intCast(y + n)))) {
+                                self.turnPixelOff(@as(u16, @intCast(x + i)), @as(u16, @intCast(y + n)));
+                                self.registers[0x0F] = 1;
+                            } else {
+                                self.turnPixelOn(@as(u16, @intCast(x + i)), @as(u16, @intCast(y + n)));
+                            }
+                        }
+                    }
                 }
             },
             Instruction.SET_REGISTER_FROM_DELAY => |reg| try self.setRegisterValue(reg, self.delay),
@@ -411,6 +426,21 @@ pub const Chip8 = struct {
     fn getRegisterValue(self: *This, register: u8) EmulatorError!u8 {
         if (register < 0x00 or register > 0x0F) return EmulatorError.UNKNOWN_REGISTER;
         return self.registers[register];
+    }
+
+    fn turnPixelOn(self: *This, x: u16, y: u16) void {
+        const i = y * SCREEN_WIDTH + x;
+        self.screen[i] = 1;
+    }
+
+    fn turnPixelOff(self: *This, x: u16, y: u16) void {
+        const i = y * SCREEN_WIDTH + x;
+        self.screen[i] = 0;
+    }
+
+    fn isPixelOn(self: *This, x: u16, y: u16) bool {
+        const i = y * SCREEN_WIDTH + x;
+        return self.screen[i] == 1;
     }
 
     pub fn deinit(self: This) void {
@@ -714,7 +744,6 @@ test "Execute Set X to Y (0x8XY0)" {
     try testing.expectEqual(0xFF, emulator.registers[1]);
 }
 
-// OR_X_Y: struct { u8, u8 }, // 0x8XY1
 test "Execute Or X and Y (0x8XY1)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -728,7 +757,6 @@ test "Execute Or X and Y (0x8XY1)" {
     try testing.expectEqual(0x07, emulator.registers[1]);
 }
 
-// AND_X_Y: struct { u8, u8 }, // 0x8XY2
 test "Execute AND X and Y (0x8XY2)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -742,7 +770,6 @@ test "Execute AND X and Y (0x8XY2)" {
     try testing.expectEqual(0x01, emulator.registers[1]);
 }
 
-// XOR_X_Y: struct { u8, u8 }, // 0x8XY3
 test "Execute XOR X and Y (0x8XY3)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -756,7 +783,6 @@ test "Execute XOR X and Y (0x8XY3)" {
     try testing.expectEqual(0x06, emulator.registers[1]);
 }
 
-// ADD_X_Y: struct { u8, u8 }, // 0x8XY4
 test "Execute ADD X and Y with Overflow (0x8XY4)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -782,7 +808,6 @@ test "Execute ADD X and Y with Overflow (0x8XY4)" {
     try testing.expectEqual(0x01, emulator.registers[0xF]);
 }
 
-// SUB_X_Y: struct { u8, u8 }, // 0x8XY5
 test "Execute SUB X and Y with Overflow (0x8XY5)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -808,7 +833,6 @@ test "Execute SUB X and Y with Overflow (0x8XY5)" {
     try testing.expectEqual(0x00, emulator.registers[0xF]);
 }
 
-// SUB_Y_X: struct { u8, u8 }, // 0x8XY7
 test "Execute SUB Y and X with Overflow (0x8XY7)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -834,7 +858,6 @@ test "Execute SUB Y and X with Overflow (0x8XY7)" {
     try testing.expectEqual(0x00, emulator.registers[0xF]);
 }
 
-// SHIFT_R_X_Y: struct { u8, u8 }, //0x8XY6
 test "Execute Shift Right X and Y [COSMAC-VIP] (0x8XY6)" {
     var emulator = try Chip8.init(
         testing.allocator,
@@ -867,7 +890,6 @@ test "Execute Shift Right X and Y [CHIP-48 and SUPER-CHIP] (0x8XY6)" {
     try testing.expectEqual(0x08, emulator.registers[1]);
 }
 
-// SHIFT_L_X_Y: struct { u8, u8 }, //0x8XYE
 test "Execute Shift Left X and Y [COSMAC-VIP] (0x8XYE)" {
     var emulator = try Chip8.init(
         testing.allocator,
@@ -900,7 +922,6 @@ test "Execute Shift Left X and Y [CHIP-48 and SUPER-CHIP] (0x8XYE)" {
     try testing.expectEqual(0x00, emulator.registers[1]);
 }
 
-// SET_INDEX: u16, // 0xANNN
 test "Execute Set Index (0xANNN)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -911,7 +932,6 @@ test "Execute Set Index (0xANNN)" {
     try testing.expectEqual(0x333, emulator.i);
 }
 
-// JUMP_WITH_OFFSET: u16, // 0xBNNN or 0xBXNN
 test "Execute Jump With Offset (0xBNNN) [COSMAC-VIP]" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -939,10 +959,83 @@ test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
 }
 
 // RANDOM: struct { u8, u8 }, // 0xCXNN    TODO
-// DRAW: struct { u8, u8, u8 }, // 0xDXYN  TODO
 
-// SKIP_IF_KEY: u8, // 0xEX9E              TODO
-// SKIP_IF_NOT_KEY: u8, // 0xEXA1          TODO
+// DRAW: struct { u8, u8, u8 }, // 0xDXYN  TODO
+test "Execute Draw with Font Character (0xDXYN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    // Clear Screen
+    const instruction0 = Instruction{ .CLEAR_SCREEN = {} };
+    try emulator.executeInstruction(instruction0);
+
+    // Load in the font character 0 to the index register
+    emulator.registers[1] = 0x00;
+    const instruction1 = Instruction{ .FONT_CHARACTER = 0x01 };
+    try emulator.executeInstruction(instruction1);
+
+    // X and Y will be 10 and 10 respectively
+    emulator.registers[2] = 10;
+    emulator.registers[3] = 10;
+
+    // Draw the font character at 5 rows (i.e. the length of the characters)
+    const instruction2 = Instruction{ .DRAW = .{ 0x02, 0x03, 0x05 } };
+    try emulator.executeInstruction(instruction2);
+
+    // Test Screen pixels for 0xF0, 0x90, 0x90, 0x90, 0xF0
+    const zero = [5][8]u8{
+        [8]u8{ 1, 1, 1, 1, 0, 0, 0, 0 },
+        [8]u8{ 1, 0, 0, 1, 0, 0, 0, 0 },
+        [8]u8{ 1, 0, 0, 1, 0, 0, 0, 0 },
+        [8]u8{ 1, 0, 0, 1, 0, 0, 0, 0 },
+        [8]u8{ 1, 1, 1, 1, 0, 0, 0, 0 },
+    };
+
+    for (0.., zero) |i, expected_row| {
+        const start_index = (10 + i) * SCREEN_WIDTH + 10;
+        const actual_row = emulator.screen[start_index .. start_index + 8];
+        try testing.expectEqualSlices(u8, &expected_row, actual_row);
+    }
+}
+
+test "Execute Draw with non-font sprite (0xDXYN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    // Clear Screen
+    const instruction0 = Instruction{ .CLEAR_SCREEN = {} };
+    try emulator.executeInstruction(instruction0);
+
+    // Happy Face
+    const happy = [6]u8{ 0x00, 0x44, 0x10, 0x82, 0x7C, 0x00 };
+    const happy_bit = [6][8]u8{
+        [8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        [8]u8{ 0, 1, 0, 0, 0, 1, 0, 0 },
+        [8]u8{ 0, 0, 0, 1, 0, 0, 0, 0 },
+        [8]u8{ 1, 0, 0, 0, 0, 0, 1, 0 },
+        [8]u8{ 0, 1, 1, 1, 1, 1, 0, 0 },
+        [8]u8{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    // Copy to emulator memory
+    emulator.i = 0x400;
+    @memcpy(emulator.memory[emulator.i .. emulator.i + 6], &happy);
+
+    // 20, 20
+    emulator.registers[2] = 20;
+    emulator.registers[3] = 20;
+
+    // Draw the font character at 5 rows (i.e. the length of the characters)
+    const instruction2 = Instruction{ .DRAW = .{ 0x02, 0x03, 0x06 } };
+    try emulator.executeInstruction(instruction2);
+
+    // test
+    for (0.., happy_bit) |i, expected_row| {
+        const start_index = (20 + i) * SCREEN_WIDTH + 20;
+        const actual_row = emulator.screen[start_index .. start_index + 8];
+        try testing.expectEqualSlices(u8, &expected_row, actual_row);
+    }
+}
 
 test "Execute Set Register From Delay (0xFX07)" {
     var emulator = try Chip8.init(testing.allocator, .{});
@@ -1007,8 +1100,6 @@ test "Execute Add Index with overflow (0xFX1E)" {
     try testing.expectEqual(0x01, emulator.registers[0x0F]);
 }
 
-// BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
-
 test "Execute Font Character (0xFX29)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -1041,7 +1132,6 @@ test "Execute Font Character (0xFX29)" {
     }
 }
 
-// BINARY_CODED_CONV: u8, // 0xFX33  TODO
 test "Execute Binary Coded Conversion (0xFX33)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -1164,3 +1254,7 @@ test "Execute Load (0xFX65) [CHIP-48 and SUPER-CHIP]" {
     }
     try testing.expectEqual(0x0300, emulator.i);
 }
+
+// BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
+// SKIP_IF_KEY: u8, // 0xEX9E              TODO
+// SKIP_IF_NOT_KEY: u8, // 0xEXA1          TODO
