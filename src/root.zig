@@ -38,6 +38,7 @@ const EmulatorError = error{
     NO_KEY_PRESSED,
     UNKNOWN_FONT_CHARACTER,
     STACK_ERROR,
+    GET_RANDOM_ERROR,
 };
 
 // Options
@@ -331,6 +332,16 @@ pub const Chip8 = struct {
                         self.pc = offset + addr;
                     },
                 }
+            },
+            Instruction.RANDOM => |v| {
+                var prng = std.Random.DefaultPrng.init(blk: {
+                    var seed: u64 = undefined;
+                    std.posix.getrandom(std.mem.asBytes(&seed)) catch return EmulatorError.GET_RANDOM_ERROR;
+                    break :blk seed;
+                });
+                const rand = prng.random();
+                const value = rand.int(u8);
+                try self.setRegisterValue(v[0], value & v[1]);
             },
             Instruction.DRAW => |v| {
                 const x = @as(u16, try self.getRegisterValue(v[0]) % SCREEN_WIDTH);
@@ -958,9 +969,24 @@ test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
     try testing.expectEqual(0x344, emulator.pc);
 }
 
-// RANDOM: struct { u8, u8 }, // 0xCXNN    TODO
+// RANDOM: struct { u8, u8 }, // 0xCXNN
+test "Execute Random (0xCXNN)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
 
-// DRAW: struct { u8, u8, u8 }, // 0xDXYN  TODO
+    emulator.registers[1] = 0x00;
+
+    const instruction1 = Instruction{ .RANDOM = .{ 0x1, 0xFF } };
+    try emulator.executeInstruction(instruction1);
+
+    const previous = emulator.registers[1];
+
+    const instruction2 = Instruction{ .RANDOM = .{ 0x1, 0xFF } };
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expect(previous != emulator.registers[1]);
+}
+
 test "Execute Draw with Font Character (0xDXYN)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
