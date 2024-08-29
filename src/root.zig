@@ -367,6 +367,25 @@ pub const Chip8 = struct {
                     },
                 }
             },
+            Instruction.LOAD => |max_reg| {
+                switch (self.emulatorType) {
+                    EmulatorType.COSMAC_VIP => {
+                        for (0..max_reg + 1) |n| {
+                            const int_n = @as(u8, @intCast(n));
+                            const value = self.memory[self.i];
+                            try self.setRegisterValue(int_n, value);
+                            self.i += 1;
+                        }
+                    },
+                    else => {
+                        var n: u8 = 0;
+                        while (n <= max_reg) : (n += 1) {
+                            const value = self.memory[self.i + n];
+                            try self.setRegisterValue(n, value);
+                        }
+                    },
+                }
+            },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -1007,11 +1026,12 @@ test "Execute Store (0xFX55) [COSMAC-VIP]" {
     emulator.registers[2] = 0x12;
     emulator.registers[3] = 0x13;
     emulator.registers[4] = 0x14;
+    emulator.registers[5] = 0x15;
 
     const instruction2 = Instruction{ .STORE = 0x05 };
     try emulator.executeInstruction(instruction2);
 
-    for (0..5) |n| {
+    for (0..6) |n| {
         try testing.expectEqual(0x10 + n, emulator.memory[0x300 + n]);
     }
 
@@ -1040,11 +1060,12 @@ test "Execute Store (0xFX55) [CHIP-48 and SUPER-CHIP]" {
     emulator.registers[2] = 0x12;
     emulator.registers[3] = 0x13;
     emulator.registers[4] = 0x14;
+    emulator.registers[5] = 0x15;
 
     const instruction2 = Instruction{ .STORE = 0x05 };
     try emulator.executeInstruction(instruction2);
 
-    for (0..5) |n| {
+    for (0..6) |n| {
         try testing.expectEqual(0x10 + n, emulator.memory[0x300 + n]);
     }
 
@@ -1052,3 +1073,42 @@ test "Execute Store (0xFX55) [CHIP-48 and SUPER-CHIP]" {
 }
 
 // LOAD: u8, // 0xFX65  TODO
+test "Execute Load (0xFX65) [COSMAC-VIP]" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
+    );
+    defer emulator.deinit();
+
+    emulator.i = 0x0300;
+    const some_data: [6]u8 = [_]u8{ 0x10, 0x11, 0x12, 0x13, 0x14, 0x15 };
+    @memcpy(emulator.memory[0x0300..0x0306], &some_data);
+
+    const instruction2 = Instruction{ .LOAD = 0x05 };
+    try emulator.executeInstruction(instruction2);
+
+    for (0..6) |n| {
+        try testing.expectEqual(0x10 + n, emulator.registers[n]);
+    }
+    try testing.expectEqual(0x0306, emulator.i);
+}
+
+test "Execute Load (0xFX65) [CHIP-48 and SUPER-CHIP]" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.SUPER_CHIP },
+    );
+    defer emulator.deinit();
+
+    emulator.i = 0x0300;
+    const some_data: [6]u8 = [_]u8{ 0x10, 0x11, 0x12, 0x13, 0x14, 0x15 };
+    @memcpy(emulator.memory[0x0300..0x0306], &some_data);
+
+    const instruction2 = Instruction{ .LOAD = 0x05 };
+    try emulator.executeInstruction(instruction2);
+
+    for (0..6) |n| {
+        try testing.expectEqual(0x10 + n, emulator.registers[n]);
+    }
+    try testing.expectEqual(0x0300, emulator.i);
+}
