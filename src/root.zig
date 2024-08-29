@@ -353,6 +353,14 @@ pub const Chip8 = struct {
                 if (char >= 16) return EmulatorError.UNKNOWN_FONT_CHARACTER;
                 self.i = FONT_START + char * 5;
             },
+            Instruction.BINARY_CODED_CONV => |reg| {
+                const value = try self.getRegisterValue(reg);
+                const addr = self.i;
+
+                self.memory[addr] = @divFloor(value, 100); // Hundreds
+                self.memory[addr + 1] = @divFloor(@mod(value, 100), 10); // Tens
+                self.memory[addr + 2] = @mod(value, 10); // Ones
+            },
             Instruction.STORE => |max_reg| {
                 switch (self.emulatorType) {
                     EmulatorType.COSMAC_VIP => {
@@ -932,10 +940,10 @@ test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
 
 // RANDOM: struct { u8, u8 }, // 0xCXNN    TODO
 // DRAW: struct { u8, u8, u8 }, // 0xDXYN  TODO
+
 // SKIP_IF_KEY: u8, // 0xEX9E              TODO
 // SKIP_IF_NOT_KEY: u8, // 0xEXA1          TODO
 
-// SET_REGISTER_FROM_DELAY: u8, // 0xFX07
 test "Execute Set Register From Delay (0xFX07)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -948,7 +956,6 @@ test "Execute Set Register From Delay (0xFX07)" {
     try testing.expectEqual(0x2F, emulator.registers[3]);
 }
 
-// SET_DELAY_FROM_REGISTER: u8, // 0xFX15
 test "Execute Delay From Register (0xFX15)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -961,7 +968,6 @@ test "Execute Delay From Register (0xFX15)" {
     try testing.expectEqual(0x2F, emulator.delay);
 }
 
-// SET_SOUND_FROM_REGISTER: u8, // 0xFX18
 test "Execute Set Sound From Register (0xFX18)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -974,7 +980,6 @@ test "Execute Set Sound From Register (0xFX18)" {
     try testing.expectEqual(0x2F, emulator.sound);
 }
 
-// ADD_INDEX: u8, // 0xFX1E
 test "Execute Add Index (0xFX1E)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -1004,7 +1009,6 @@ test "Execute Add Index with overflow (0xFX1E)" {
 
 // BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
 
-// FONT_CHARACTER: u8, // 0xFX29  TODO
 test "Execute Font Character (0xFX29)" {
     var emulator = try Chip8.init(testing.allocator, .{});
     defer emulator.deinit();
@@ -1038,6 +1042,20 @@ test "Execute Font Character (0xFX29)" {
 }
 
 // BINARY_CODED_CONV: u8, // 0xFX33  TODO
+test "Execute Binary Coded Conversion (0xFX33)" {
+    var emulator = try Chip8.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[1] = 123;
+    emulator.i = 0x400;
+
+    const instruction = Instruction{ .BINARY_CODED_CONV = 0x01 };
+    try emulator.executeInstruction(instruction);
+
+    for (0..3) |n| {
+        try testing.expectEqual(n + 1, emulator.memory[emulator.i + n]);
+    }
+}
 
 test "Execute Store (0xFX55) [COSMAC-VIP]" {
     var emulator = try Chip8.init(
