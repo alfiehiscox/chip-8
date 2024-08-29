@@ -347,6 +347,26 @@ pub const Chip8 = struct {
                 self.i += try self.getRegisterValue(reg);
                 if (self.i > 0x0FFF) self.registers[0x0F] = 1; // This is extra behaviour
             },
+            //..//
+            Instruction.STORE => |max_reg| {
+                switch (self.emulatorType) {
+                    EmulatorType.COSMAC_VIP => {
+                        for (0..max_reg + 1) |n| {
+                            const int_n = @as(u8, @intCast(n));
+                            const value = try self.getRegisterValue(int_n);
+                            self.memory[self.i] = value;
+                            self.i += 1;
+                        }
+                    },
+                    else => {
+                        var n: u8 = 0;
+                        while (n <= max_reg) : (n += 1) {
+                            const value = try self.getRegisterValue(n);
+                            self.memory[self.i + n] = value;
+                        }
+                    },
+                }
+            },
             else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
@@ -959,7 +979,76 @@ test "Execute Add Index with overflow (0xFX1E)" {
 }
 
 // BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
+
 // FONT_CHARACTER: u8, // 0xFX29  TODO
+
 // BINARY_CODED_CONV: u8, // 0xFX33  TODO
+
 // STORE: u8, // 0xFX55  TODO
+test "Execute Store (0xFX55) [COSMAC-VIP]" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
+    );
+    defer emulator.deinit();
+
+    emulator.i = 0x0300;
+    emulator.registers[0] = 0x10;
+
+    // Test edge case
+    const instruction1 = Instruction{ .STORE = 0x00 };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x10, emulator.memory[0x300]);
+    try testing.expectEqual(0x301, emulator.i);
+
+    emulator.i = 0x0300;
+    emulator.registers[1] = 0x11;
+    emulator.registers[2] = 0x12;
+    emulator.registers[3] = 0x13;
+    emulator.registers[4] = 0x14;
+
+    const instruction2 = Instruction{ .STORE = 0x05 };
+    try emulator.executeInstruction(instruction2);
+
+    for (0..5) |n| {
+        try testing.expectEqual(0x10 + n, emulator.memory[0x300 + n]);
+    }
+
+    try testing.expectEqual(0x0306, emulator.i);
+}
+
+test "Execute Store (0xFX55) [CHIP-48 and SUPER-CHIP]" {
+    var emulator = try Chip8.init(
+        testing.allocator,
+        EmulatorOptions{ .emulatorType = EmulatorType.SUPER_CHIP },
+    );
+    defer emulator.deinit();
+
+    emulator.i = 0x0300;
+    emulator.registers[0] = 0x10;
+
+    // Test edge case
+    const instruction1 = Instruction{ .STORE = 0x00 };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x10, emulator.memory[0x300]);
+    try testing.expectEqual(0x300, emulator.i);
+
+    emulator.i = 0x0300;
+    emulator.registers[1] = 0x11;
+    emulator.registers[2] = 0x12;
+    emulator.registers[3] = 0x13;
+    emulator.registers[4] = 0x14;
+
+    const instruction2 = Instruction{ .STORE = 0x05 };
+    try emulator.executeInstruction(instruction2);
+
+    for (0..5) |n| {
+        try testing.expectEqual(0x10 + n, emulator.memory[0x300 + n]);
+    }
+
+    try testing.expectEqual(0x0300, emulator.i);
+}
+
 // LOAD: u8, // 0xFX65  TODO
