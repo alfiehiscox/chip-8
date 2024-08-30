@@ -30,3 +30,4 @@ zig build run
     - The emulator construct can be fed a renderer interface. 
     - Write an renderer interface for raylib, GLFW and the terminal
 - Test the entire project (this becomes easier when you extract the emulator)
+

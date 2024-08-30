@@ -2,9 +2,14 @@ const std = @import("std");
 const testing = std.testing;
 
 // Original Chip8 Screen was 64x32 Pixels. TODO: Make this configurable
-const SCREEN_WIDTH = 64;
-const SCREEN_HEIGHT = 32;
-const DIMS = SCREEN_WIDTH * SCREEN_HEIGHT;
+pub const SCREEN_WIDTH = 64;
+pub const SCREEN_HEIGHT = 32;
+pub const DIMS = SCREEN_WIDTH * SCREEN_HEIGHT;
+
+const FRAMES_PER_SECOND: u64 = 60;
+const FRAME_DURATION_NANO: u64 = 1_000_000_000 / FRAMES_PER_SECOND;
+const INSTRUCTIONS_PER_SECOND: u64 = 700;
+const INSTRUCTION_DURATION_NANO: u64 = 1_000_000_000 / INSTRUCTIONS_PER_SECOND;
 
 const FONT_START = 0x050;
 
@@ -28,10 +33,10 @@ const FONT: [80]u8 = [80]u8{
 };
 
 // There are a couple different versions of Chip8.
-const EmulatorType = enum { COSMAC_VIP, SUPER_CHIP, CHIP_48 };
+pub const EmulatorType = enum { COSMAC_VIP, SUPER_CHIP, CHIP_48 };
 
 // Errors
-const EmulatorError = error{
+pub const EmulatorError = error{
     OUT_OF_MEMORY,
     UNKNOWN_INSTRUCTION,
     UNKNOWN_REGISTER,
@@ -44,10 +49,11 @@ const EmulatorError = error{
 // Options
 pub const EmulatorOptions = struct {
     emulatorType: ?EmulatorType = null,
+    deviceCtx: ?DeviceCtx = null,
 };
 
 // The main emulator structure.
-pub const Chip8 = struct {
+pub const Emulator = struct {
     allocator: std.mem.Allocator,
     emulatorType: EmulatorType,
 
@@ -64,11 +70,11 @@ pub const Chip8 = struct {
     delay: u8,
     sound: u8,
 
-    // TODO: We need a renderer interface
+    ctx: DeviceCtx,
 
     const This = @This();
 
-    pub fn init(allocator: std.mem.Allocator, comptime options: EmulatorOptions) !This {
+    pub fn init(allocator: std.mem.Allocator, options: EmulatorOptions) !This {
         const screen = try allocator.alloc(u8, DIMS);
         errdefer allocator.free(screen);
 
@@ -84,6 +90,12 @@ pub const Chip8 = struct {
 
         const stack = std.ArrayList(u16).init(allocator);
         errdefer stack.deinit();
+
+        const ctx = if (options.deviceCtx) |deviceCtx| deviceCtx else blk: {
+            var mock = MockDeviceCtx{};
+            const ctx = mock.ctx();
+            break :blk ctx;
+        };
 
         return .{
             .allocator = allocator,
@@ -101,11 +113,68 @@ pub const Chip8 = struct {
 
             .delay = 0,
             .sound = 0,
+
+            .ctx = ctx,
         };
     }
 
     pub fn run(self: *This, program: []u8) !void {
         self.load(program);
+
+        var last_frame = try std.time.Instant.now();
+        var instr_acc: u64 = 0;
+        var frame_acc: u64 = 0;
+
+        var instructionCount: u64 = 0;
+        var per_second: u64 = 0;
+
+        while (!self.ctx.exit()) {
+            const start = try std.time.Instant.now();
+            const since_frame = start.since(last_frame);
+            last_frame = start;
+
+            instr_acc += since_frame;
+            frame_acc += since_frame;
+            per_second += since_frame;
+
+            var draws = false;
+            while (instr_acc >= INSTRUCTION_DURATION_NANO) {
+                const instruction = try self.fetchInstruction();
+
+                // try printInstruction(instruction);
+                try self.executeInstruction(instruction);
+                if (instruction.draws()) draws = true;
+                instr_acc -= INSTRUCTION_DURATION_NANO;
+                instructionCount += 1;
+
+                // Detect Infinite Loop
+                switch (instruction) {
+                    Instruction.JUMP => |addr| if (addr == self.pc - 2) break,
+                    else => {},
+                }
+            }
+
+            if (frame_acc >= FRAME_DURATION_NANO) {
+                if (self.delay > 0) self.delay -= 1;
+                if (self.sound > 0) self.sound -= 1;
+                if (draws) try self.ctx.draw(self.screen);
+                frame_acc -= FRAME_DURATION_NANO;
+            }
+
+            if (per_second >= std.time.ns_per_s) {
+                std.debug.print("{d} Instructions per Second\n", .{instructionCount});
+                instructionCount = 0;
+                per_second = 0;
+            }
+
+            const end = try std.time.Instant.now();
+            const elapsed = end.since(start);
+            const delta: i64 = @as(i64, @intCast(FRAME_DURATION_NANO)) - @as(i64, @intCast(elapsed));
+            if (delta > 0) {
+                const wait = @as(u64, @intCast(delta));
+                std.time.sleep(wait);
+            }
+        }
     }
 
     fn load(self: *This, program: []u8) void {
@@ -349,10 +418,10 @@ pub const Chip8 = struct {
                 self.registers[0x0F] = 0x00;
 
                 for (0..v[2]) |n| {
-                    if ((y + n) > SCREEN_HEIGHT) continue;
+                    if ((y + n) >= SCREEN_HEIGHT) continue;
                     const data = self.memory[self.i + n];
                     for (0..8) |i| {
-                        if ((x + i) > SCREEN_WIDTH) continue;
+                        if ((x + i) >= SCREEN_WIDTH) continue;
                         const bit_index = @as(u3, @intCast(7 - i));
                         const bit = (data >> bit_index) & 1;
                         if (bit == 1) {
@@ -386,6 +455,23 @@ pub const Chip8 = struct {
                 self.memory[addr] = @divFloor(value, 100); // Hundreds
                 self.memory[addr + 1] = @divFloor(@mod(value, 100), 10); // Tens
                 self.memory[addr + 2] = @mod(value, 10); // Ones
+            },
+            Instruction.SKIP_IF_KEY => |reg| {
+                const key = try self.getRegisterValue(reg);
+                if (self.ctx.isPressed(key)) self.pc += 2;
+            },
+            Instruction.SKIP_IF_NOT_KEY => |reg| {
+                const key = try self.getRegisterValue(reg);
+                if (!(self.ctx.isPressed(key))) self.pc += 2;
+            },
+            Instruction.BLOCK_KEY_PRESS => |reg| {
+                const key = self.ctx.wasPressed() catch {
+                    self.pc -= 2; // Loop this instruction until key is pressed
+                    // std.debug.print("No Key Pressed\n", .{});
+                    return;
+                };
+                // std.debug.print("Key Pressed: {X:1}\n", .{key});
+                try self.setRegisterValue(reg, key);
             },
             Instruction.STORE => |max_reg| {
                 switch (self.emulatorType) {
@@ -425,7 +511,6 @@ pub const Chip8 = struct {
                     },
                 }
             },
-            else => return EmulatorError.UNKNOWN_INSTRUCTION,
         }
     }
 
@@ -498,6 +583,108 @@ const Instruction = union(enum) {
     BINARY_CODED_CONV: u8, // 0xFX33
     STORE: u8, // 0xFX55
     LOAD: u8, // 0xFX65
+
+    fn draws(self: Instruction) bool {
+        return switch (self) {
+            Instruction.DRAW => |_| true,
+            Instruction.CLEAR_SCREEN => |_| true,
+            else => false,
+        };
+    }
+};
+
+fn printInstruction(instruction: Instruction) !void {
+    switch (instruction) {
+        Instruction.CLEAR_SCREEN => |_| std.debug.print("0x00E0 (Clear Screen)\n", .{}),
+        Instruction.RETURN => |_| std.debug.print("0x00EE (Return)\n", .{}),
+        Instruction.JUMP => |addr| std.debug.print("0x1{X:0>3} (Jump to address {X:0>3})\n", .{ addr, addr }),
+        Instruction.JUMP_SUBROUTINE => |addr| std.debug.print("0x2{X:0>3} (Jump to subroutine {X:0>3})\n", .{ addr, addr }),
+        Instruction.EQUAL_TO => |v| std.debug.print("0x3{X:1}{X:0>2} (Equal to Condition: {X})\n", .{ v[0], v[1], v[1] }),
+        Instruction.NOT_EQUAL_TO => |v| std.debug.print("0x3{X:1}{X:0>2} (Not Equal to Condition: {X})\n", .{ v[0], v[1], v[1] }),
+        Instruction.EQUAL_REGISTERS => |v| std.debug.print("0x5{X:1}{X:1}0 (Registers Equal Condition)\n", .{ v[0], v[1] }),
+        Instruction.NOT_EQUAL_REGISTERS => |v| std.debug.print("0x9{X:1}{X:1}0 (Registers Not Equal Condition)\n", .{ v[0], v[1] }),
+        Instruction.SET_REGISTER => |v| std.debug.print("0x6{X:1}{X:0>2} (Set Register V{X:1} to {X:0>2})\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.ADD_REGISTER => |v| std.debug.print("0x7{X:1}{X:0>2} (Add {X:0>2} to Register V{X:1})\n", .{ v[0], v[1], v[1], v[0] }),
+        Instruction.SET_X_Y => |v| std.debug.print("0x8{X:1}{X:1}0 (V{X:1} is set to V{X:1})\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.OR_X_Y => |v| std.debug.print("0x8{X:1}{X:1}1 (V{X:1} is set to V{X:1} | V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.AND_X_Y => |v| std.debug.print("0x8{X:1}{X:1}2 (V{X:1} is set to V{X:1} & V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.XOR_X_Y => |v| std.debug.print("0x8{X:1}{X:1}3 (V{X:1} is set to V{X:1} ^ V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.ADD_X_Y => |v| std.debug.print("0x8{X:1}{X:1}4 (V{X:1} is set to V{X:1} + V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.SUB_X_Y => |v| std.debug.print("0x8{X:1}{X:1}5 (V{X:1} is set to V{X:1} - V{X:1})\n", .{ v[0], v[1], v[0], v[0], v[1] }),
+        Instruction.SHIFT_R_X_Y => |v| std.debug.print("0x8{X:1}{X:1}6 (V{X:1} is set to V{X:1} >> 1)\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.SUB_Y_X => |v| std.debug.print("0x8{X:1}{X:1}7 (V{X:1} is set to V{X:1} - V{X:1})\n", .{ v[0], v[1], v[0], v[1], v[0] }),
+        Instruction.SHIFT_L_X_Y => |v| std.debug.print("0x8{X:1}{X:1}E (V{X:1} is set to V{X:1} << 1)\n", .{ v[0], v[1], v[0], v[1] }),
+        Instruction.SET_INDEX => |v| std.debug.print("0xA{X:0>3} (Set I to {X:0>3})\n", .{ v, v }),
+        // .. //
+        Instruction.DRAW => |v| std.debug.print("0xD{X:1}{X:1}{X:1} (Draw Sprite at {X:0>4} to with size)\n", .{ v[0], v[1], v[2], v[2] }),
+        // .. //
+        Instruction.BLOCK_KEY_PRESS => |reg| std.debug.print("0x2{X:1}0A (Block Until a key is press) -- ", .{reg}),
+        else => std.debug.print("Unimplented print!\n", .{}),
+    }
+}
+
+// ================== Device Context Interface ===================
+// Bridges the emulator and platform specific (or cross-platform) handling
+// of system peripherals.
+pub const DeviceCtx = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        draw: *const fn (ctx: *anyopaque, screen_buffer: []u8) anyerror!void,
+        exit: *const fn (ctx: *anyopaque) bool,
+        isPressed: *const fn (ctx: *anyopaque, key: u8) bool,
+        wasPressed: *const fn (ctx: *anyopaque) anyerror!u8,
+    };
+
+    pub inline fn draw(self: DeviceCtx, screen_buffer: []u8) !void {
+        return self.vtable.draw(self.ptr, screen_buffer);
+    }
+
+    pub inline fn exit(self: DeviceCtx) bool {
+        return self.vtable.exit(self.ptr);
+    }
+
+    pub inline fn isPressed(self: DeviceCtx, key: u8) bool {
+        return self.vtable.isPressed(self.ptr, key);
+    }
+
+    pub inline fn wasPressed(self: DeviceCtx) !u8 {
+        return self.vtable.wasPressed(self.ptr);
+    }
+};
+
+const MockDeviceCtx = struct {
+    keyPressed: ?u8 = null,
+
+    fn draw(_: *anyopaque, screen_buffer: []u8) !void {
+        std.debug.print("Drawing: {s}", .{screen_buffer});
+    }
+
+    fn exit(_: *anyopaque) bool {
+        return false;
+    }
+
+    fn isPressed(_: *anyopaque, key: u8) bool {
+        return key == 0x01;
+    }
+
+    fn wasPressed(ptr: *anyopaque) !u8 {
+        const self: *MockDeviceCtx = @ptrCast(@alignCast(ptr));
+        return self.keyPressed orelse EmulatorError.NO_KEY_PRESSED;
+    }
+
+    fn ctx(self: *MockDeviceCtx) DeviceCtx {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .draw = draw,
+                .exit = exit,
+                .isPressed = isPressed,
+                .wasPressed = wasPressed,
+            },
+        };
+    }
 };
 
 // ===================================================================
@@ -505,7 +692,7 @@ const Instruction = union(enum) {
 // ===================================================================
 
 test "Chip 8 Init" {
-    const chip8 = try Chip8.init(testing.allocator, .{});
+    const chip8 = try Emulator.init(testing.allocator, .{});
     defer chip8.deinit();
 }
 
@@ -561,7 +748,7 @@ test "Fetch All Instruction" {
         Instruction{ .LOAD = 0x01 },
     };
 
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.load(&opcodes);
@@ -574,7 +761,7 @@ test "Fetch All Instruction" {
 }
 
 test "Execute Clear Screen (0x00E0)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Fill Screen with Junk
@@ -590,7 +777,7 @@ test "Execute Clear Screen (0x00E0)" {
 }
 
 test "Execute Return (0x00EE)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Push a value onto the stack
@@ -602,7 +789,7 @@ test "Execute Return (0x00EE)" {
 }
 
 test "Execute Jump (0x1NNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     var opcode: [2]u8 = .{ 0x11, 0x23 };
@@ -614,7 +801,7 @@ test "Execute Jump (0x1NNN)" {
 }
 
 test "Execute Jump With Subroutine (0x2NNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     var opcode: [2]u8 = .{ 0x21, 0x23 };
@@ -628,7 +815,7 @@ test "Execute Jump With Subroutine (0x2NNN)" {
 }
 
 test "Execute Equal Too (0x3XNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0xFF;
@@ -648,7 +835,7 @@ test "Execute Equal Too (0x3XNN)" {
 }
 
 test "Execute Equal Too (0x4XNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0xAA;
@@ -668,7 +855,7 @@ test "Execute Equal Too (0x4XNN)" {
 }
 
 test "Execute Equal Registers (0x5XY0)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0xAA;
@@ -690,7 +877,7 @@ test "Execute Equal Registers (0x5XY0)" {
 }
 
 test "Execute Not Equal Registers (0x9XY0)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0xBB;
@@ -712,7 +899,7 @@ test "Execute Not Equal Registers (0x9XY0)" {
 }
 
 test "Execute Set Register (0x6XNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     const instruction = Instruction{ .SET_REGISTER = .{ 0x01, 0xFF } };
@@ -722,7 +909,7 @@ test "Execute Set Register (0x6XNN)" {
 }
 
 test "Execute Add Register (0x7XNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Non Wrapping
@@ -743,7 +930,7 @@ test "Execute Add Register (0x7XNN)" {
 }
 
 test "Execute Set X to Y (0x8XY0)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0x02;
@@ -756,7 +943,7 @@ test "Execute Set X to Y (0x8XY0)" {
 }
 
 test "Execute Or X and Y (0x8XY1)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0x02;
@@ -769,7 +956,7 @@ test "Execute Or X and Y (0x8XY1)" {
 }
 
 test "Execute AND X and Y (0x8XY2)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0x03;
@@ -782,7 +969,7 @@ test "Execute AND X and Y (0x8XY2)" {
 }
 
 test "Execute XOR X and Y (0x8XY3)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0x03;
@@ -795,7 +982,7 @@ test "Execute XOR X and Y (0x8XY3)" {
 }
 
 test "Execute ADD X and Y with Overflow (0x8XY4)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Non wrapping
@@ -820,7 +1007,7 @@ test "Execute ADD X and Y with Overflow (0x8XY4)" {
 }
 
 test "Execute SUB X and Y with Overflow (0x8XY5)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Non wrapping
@@ -845,7 +1032,7 @@ test "Execute SUB X and Y with Overflow (0x8XY5)" {
 }
 
 test "Execute SUB Y and X with Overflow (0x8XY7)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Non wrapping
@@ -870,8 +1057,9 @@ test "Execute SUB Y and X with Overflow (0x8XY7)" {
 }
 
 test "Execute Shift Right X and Y [COSMAC-VIP] (0x8XY6)" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
+
         EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
     );
     defer emulator.deinit();
@@ -886,8 +1074,9 @@ test "Execute Shift Right X and Y [COSMAC-VIP] (0x8XY6)" {
 }
 
 test "Execute Shift Right X and Y [CHIP-48 and SUPER-CHIP] (0x8XY6)" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
+
         EmulatorOptions{ .emulatorType = EmulatorType.SUPER_CHIP },
     );
     defer emulator.deinit();
@@ -902,8 +1091,9 @@ test "Execute Shift Right X and Y [CHIP-48 and SUPER-CHIP] (0x8XY6)" {
 }
 
 test "Execute Shift Left X and Y [COSMAC-VIP] (0x8XYE)" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
+
         EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
     );
     defer emulator.deinit();
@@ -918,8 +1108,9 @@ test "Execute Shift Left X and Y [COSMAC-VIP] (0x8XYE)" {
 }
 
 test "Execute Shift Left X and Y [CHIP-48 and SUPER-CHIP] (0x8XYE)" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
+
         EmulatorOptions{ .emulatorType = EmulatorType.CHIP_48 },
     );
     defer emulator.deinit();
@@ -934,7 +1125,7 @@ test "Execute Shift Left X and Y [CHIP-48 and SUPER-CHIP] (0x8XYE)" {
 }
 
 test "Execute Set Index (0xANNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     const instruction = Instruction{ .SET_INDEX = 0x333 };
@@ -944,7 +1135,7 @@ test "Execute Set Index (0xANNN)" {
 }
 
 test "Execute Jump With Offset (0xBNNN) [COSMAC-VIP]" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[0] = 0x11;
@@ -956,9 +1147,13 @@ test "Execute Jump With Offset (0xBNNN) [COSMAC-VIP]" {
 }
 
 test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
-    var emulator = try Chip8.init(testing.allocator, EmulatorOptions{
-        .emulatorType = EmulatorType.CHIP_48,
-    });
+    var emulator = try Emulator.init(
+        testing.allocator,
+
+        EmulatorOptions{
+            .emulatorType = EmulatorType.CHIP_48,
+        },
+    );
     defer emulator.deinit();
 
     emulator.registers[3] = 0x11;
@@ -969,9 +1164,9 @@ test "Execute Jump With Offset (0xBXNN) [CHIP-48 and SUPER-CHIP]" {
     try testing.expectEqual(0x344, emulator.pc);
 }
 
-// RANDOM: struct { u8, u8 }, // 0xCXNN
+// Not the best test but it'll do
 test "Execute Random (0xCXNN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 0x00;
@@ -988,7 +1183,7 @@ test "Execute Random (0xCXNN)" {
 }
 
 test "Execute Draw with Font Character (0xDXYN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Clear Screen
@@ -1025,7 +1220,7 @@ test "Execute Draw with Font Character (0xDXYN)" {
 }
 
 test "Execute Draw with non-font sprite (0xDXYN)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     // Clear Screen
@@ -1064,7 +1259,7 @@ test "Execute Draw with non-font sprite (0xDXYN)" {
 }
 
 test "Execute Set Register From Delay (0xFX07)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.delay = 0x2F;
@@ -1076,7 +1271,7 @@ test "Execute Set Register From Delay (0xFX07)" {
 }
 
 test "Execute Delay From Register (0xFX15)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[3] = 0x2F;
@@ -1088,7 +1283,7 @@ test "Execute Delay From Register (0xFX15)" {
 }
 
 test "Execute Set Sound From Register (0xFX18)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[3] = 0x2F;
@@ -1100,7 +1295,7 @@ test "Execute Set Sound From Register (0xFX18)" {
 }
 
 test "Execute Add Index (0xFX1E)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.i = 0x11;
@@ -1113,7 +1308,7 @@ test "Execute Add Index (0xFX1E)" {
 }
 
 test "Execute Add Index with overflow (0xFX1E)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.i = 0x0FFF;
@@ -1127,7 +1322,7 @@ test "Execute Add Index with overflow (0xFX1E)" {
 }
 
 test "Execute Font Character (0xFX29)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     const font_addresses: [16]u16 = [_]u16{
@@ -1159,7 +1354,7 @@ test "Execute Font Character (0xFX29)" {
 }
 
 test "Execute Binary Coded Conversion (0xFX33)" {
-    var emulator = try Chip8.init(testing.allocator, .{});
+    var emulator = try Emulator.init(testing.allocator, .{});
     defer emulator.deinit();
 
     emulator.registers[1] = 123;
@@ -1174,7 +1369,7 @@ test "Execute Binary Coded Conversion (0xFX33)" {
 }
 
 test "Execute Store (0xFX55) [COSMAC-VIP]" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
         EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
     );
@@ -1208,7 +1403,7 @@ test "Execute Store (0xFX55) [COSMAC-VIP]" {
 }
 
 test "Execute Store (0xFX55) [CHIP-48 and SUPER-CHIP]" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
         EmulatorOptions{ .emulatorType = EmulatorType.SUPER_CHIP },
     );
@@ -1242,7 +1437,7 @@ test "Execute Store (0xFX55) [CHIP-48 and SUPER-CHIP]" {
 }
 
 test "Execute Load (0xFX65) [COSMAC-VIP]" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
         EmulatorOptions{ .emulatorType = EmulatorType.COSMAC_VIP },
     );
@@ -1262,7 +1457,7 @@ test "Execute Load (0xFX65) [COSMAC-VIP]" {
 }
 
 test "Execute Load (0xFX65) [CHIP-48 and SUPER-CHIP]" {
-    var emulator = try Chip8.init(
+    var emulator = try Emulator.init(
         testing.allocator,
         EmulatorOptions{ .emulatorType = EmulatorType.SUPER_CHIP },
     );
@@ -1282,5 +1477,81 @@ test "Execute Load (0xFX65) [CHIP-48 and SUPER-CHIP]" {
 }
 
 // BLOCK_KEY_PRESS: u8, // 0xFX0A  TODO
-// SKIP_IF_KEY: u8, // 0xEX9E              TODO
-// SKIP_IF_NOT_KEY: u8, // 0xEXA1          TODO
+test "Execute Block Key Press without Press (0xFX0A)" {
+    var emulator = try Emulator.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    emulator.registers[5] = 0xAA;
+
+    var instructions: [2]u8 = [_]u8{ 0xF5, 0x0A };
+    emulator.load(&instructions);
+    const instruction1 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x200, emulator.pc);
+    try testing.expectEqual(0xAA, emulator.registers[5]);
+}
+
+test "Execute Block Key Press with Press (0xFX0A)" {
+    var mockDeviceCtx = MockDeviceCtx{ .keyPressed = 0x0F };
+    const ctx = mockDeviceCtx.ctx();
+
+    var emulator = try Emulator.init(testing.allocator, .{ .deviceCtx = ctx });
+    defer emulator.deinit();
+
+    emulator.registers[5] = 0xAA;
+
+    var instructions: [2]u8 = [_]u8{ 0xF5, 0x0A };
+    emulator.load(&instructions);
+    const instruction1 = try emulator.fetchInstruction();
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(0x202, emulator.pc);
+    try testing.expectEqual(0x0F, emulator.registers[5]);
+}
+
+test "Execute Skip If Key (0xEX9E)" {
+    var emulator = try Emulator.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    var pc = emulator.pc;
+    emulator.registers[5] = 0x01;
+
+    const instruction1 = Instruction{ .SKIP_IF_KEY = 0x05 };
+    try emulator.executeInstruction(instruction1);
+
+    // Normally because we fetch the instruction we would auto-increment the pc.
+    // Here we skip that so it's only pc + 2, not pc + 4.
+    try testing.expectEqual(pc + 2, emulator.pc);
+
+    pc = emulator.pc;
+    emulator.registers[5] = 0x02;
+
+    const instruction2 = Instruction{ .SKIP_IF_KEY = 0x05 };
+    try emulator.executeInstruction(instruction2);
+
+    try testing.expectEqual(pc, emulator.pc);
+}
+
+test "Execute Skip If Not Key (0xEX9E)" {
+    var emulator = try Emulator.init(testing.allocator, .{});
+    defer emulator.deinit();
+
+    var pc = emulator.pc;
+    emulator.registers[5] = 0x01;
+
+    const instruction1 = Instruction{ .SKIP_IF_NOT_KEY = 0x05 };
+    try emulator.executeInstruction(instruction1);
+
+    try testing.expectEqual(pc, emulator.pc);
+
+    pc = emulator.pc;
+    emulator.registers[5] = 0x02;
+
+    const instruction2 = Instruction{ .SKIP_IF_NOT_KEY = 0x05 };
+    try emulator.executeInstruction(instruction2);
+
+    // Normally because we fetch the instruction we would auto-increment the pc.
+    // Here we skip that so it's only pc + 2, not pc + 4.
+    try testing.expectEqual(pc + 2, emulator.pc);
+}
