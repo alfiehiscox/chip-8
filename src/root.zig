@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// Original Chip8 Screen was 64x32 Pixels. TODO: Make this configurable
+// Original Chip8 Screen was 64x32 Pixels.
 pub const SCREEN_WIDTH = 64;
 pub const SCREEN_HEIGHT = 32;
 pub const DIMS = SCREEN_WIDTH * SCREEN_HEIGHT;
@@ -139,17 +139,26 @@ pub const Emulator = struct {
 
             var draws = false;
             while (instr_acc >= INSTRUCTION_DURATION_NANO) {
+                const pc = self.pc;
                 const instruction = try self.fetchInstruction();
 
-                // try printInstruction(instruction);
+                //try printInstruction(instruction);
                 try self.executeInstruction(instruction);
                 if (instruction.draws()) draws = true;
                 instr_acc -= INSTRUCTION_DURATION_NANO;
                 instructionCount += 1;
 
-                // Detect Infinite Loop
+                // Detect Infinite Loop and run at 60FPS
+                // Note: Here we specifically need to draw for
+                // raylib device ctx... otherwise the program will be
+                // flagged as not responding
                 switch (instruction) {
-                    Instruction.JUMP => |addr| if (addr == self.pc - 2) break,
+                    Instruction.JUMP => |_| {
+                        if (pc == self.pc) {
+                            draws = true;
+                            break;
+                        }
+                    },
                     else => {},
                 }
             }
@@ -162,7 +171,7 @@ pub const Emulator = struct {
             }
 
             if (per_second >= std.time.ns_per_s) {
-                std.debug.print("{d} Instructions per Second\n", .{instructionCount});
+                // std.debug.print("{d} Instructions per Second\n", .{instructionCount});
                 instructionCount = 0;
                 per_second = 0;
             }

@@ -1,14 +1,35 @@
 # Chip 8 Emulation in Zig
 
+## Status: Partial Complete 🟢
+
 A simple Chip 8 emulator written in zig (0.14.0).
 
-## Install
+## Install Source + Build
 
 ```
 git clone https://github.com/alfiehiscox/chip-8.git
 cd chip-8
-zig build run
+zig build
 ```
+
+## Usage 
+
+After building run: 
+
+```
+./zig-out/bin/chip-8 <path_to_ch8_file>
+```
+
+Configuration is only achieved through tweaking the executable. 
+
+Example after downloading [this breakout rom](https://github.com/badlogic/chip8/blob/master/roms/breakout.rom) 
+into the source directory and building:
+
+```
+./zig-out/bin/chip-8 ./breakout.ch8
+```
+
+![Demo](https://github.com/alfiehiscox/chip-8/blob/main/demo.gif)
 
 ## Resources
 
@@ -16,18 +37,26 @@ zig build run
 
 [raylib](https://www.raylib.com/cheatsheet/cheatsheet.html)
 
-## Roadmap  
+## Current Status
 
-- Extract the emulator out of the global space
-    - An emulator needs to have a screen and memory (both []u8).
-    - An emulator needs to have a registers, timers and stack.
-    - This emulator should make sure to run at 60FPS. 
-    - The emulator manipulates registers and the screen. 
-    - The renderer takes the screen and renders it out to the display. 
-- Create a custom generic stack implementation
-- Use a general allocator instead of global state
-- Use a general renderer instead of hardcoded raylib. 
-    - The emulator construct can be fed a renderer interface. 
-    - Write an renderer interface for raylib, GLFW and the terminal
-- Test the entire project (this becomes easier when you extract the emulator)
+The emulator works with a raylib device ctx and should be able to 
+exectute most programs (although this has not be rigourously tested). 
+
+Only spec'd for intel macOS on `zig 0.14.0`.
+
+There was a push to have a general interface for different devices. 
+You can see this in the `main` function in `src/main.zig`. The idea 
+being you provide you're own graphics and system peripheral implementations 
+to the emulator which executes them and doesn't really care. 
+
+There are two current device ctxs. Raylib works fine. There is also a 
+terminal based one, which will draw and update a game loop in the the terminal 
+using ASCII art. The problem is with registering key presses at the same time 
+which needs to be done in a separate thread. I started on this with the 
+KeyQueue implementations found in the repository but never got it to 
+work. 
+
+I don't currently have the time to work on this project so moving it 
+into a `partial-complete` status and using the `main` path with Raylib 
+for demo purposes. 
 
